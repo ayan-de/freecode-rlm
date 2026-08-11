@@ -11,6 +11,7 @@ export interface RunOptions {
   // read undefined.
   baseUrl: string;
   apiKey?: string;
+  context?: string;
   maxDepth: number;
   maxIterations: number;
   maxSubCalls: number;
@@ -48,6 +49,10 @@ export async function run(args: string[]): Promise<number> {
       "https://api.minimax.io/v1",
     )
     .option("--api-key <key>", "API key (defaults to MINIMAX_API_KEY env)")
+    .option(
+      "--context <string>",
+      "long context to pass to the model (e.g. a haystack). Read from @file path if the value starts with @.",
+    )
     .option("--max-depth <n>", "max recursion depth", "3")
     .option("--max-iterations <n>", "max outer iterations", "50")
     .option("--max-sub-calls <n>", "max sub-calls across the run", "100")
@@ -85,6 +90,25 @@ export async function run(args: string[]): Promise<number> {
     return 2;
   }
 
+  // Resolve --context: if it starts with "@", read the rest as a file path.
+  // Useful for NIAH-style queries where the haystack is too large to paste.
+  let context: string | undefined;
+  if (opts.context) {
+    if (opts.context.startsWith("@")) {
+      const fs = await import("node:fs/promises");
+      try {
+        context = await fs.readFile(opts.context.slice(1), "utf8");
+      } catch (e) {
+        console.error(
+          `error: failed to read context file: ${(e as Error).message}`,
+        );
+        return 2;
+      }
+    } else {
+      context = opts.context;
+    }
+  }
+
   const client = new VercelAIClient({
     model: opts.model,
     apiKey,
@@ -104,7 +128,9 @@ export async function run(args: string[]): Promise<number> {
   });
 
   try {
-    const result = await rlm.completion(prompt);
+    const result = context
+      ? await rlm.completion(prompt, { context })
+      : await rlm.completion(prompt);
     process.stdout.write(result.response + "\n");
     if (opts.verbose) {
       console.error(
