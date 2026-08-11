@@ -47,10 +47,13 @@ export class RLM {
       });
   }
 
-  async completion(prompt: string): Promise<RLMResult> {
+  async completion(prompt: string, opts?: { context?: string }): Promise<RLMResult> {
     const startedAt = Date.now();
     this.userPrompt = prompt;
-    await this.repl.load("context", prompt);
+    // Default: the prompt itself is loaded as `context`. Callers can override
+    // via opts.context when they want a short user-facing prompt with a
+    // different (typically larger) REPL-scoped context — e.g. NIAH tests.
+    await this.repl.load("context", opts?.context ?? prompt);
 
     // FINAL/PRINT/FINAL_VAR and the host bridge are injected into the sandbox
     // on the first call. For non-IsolatedVmREPL (e.g. test fakes) we skip —
