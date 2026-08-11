@@ -172,6 +172,25 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.15.3)
 
+  packages/rlm-core:
+    dependencies:
+      '@freecode-rs/client':
+        specifier: workspace:*
+        version: link:../rlm-client
+    devDependencies:
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.15.3
+      typescript:
+        specifier: 5.9.2
+        version: 5.9.2
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.15.3)
+
   packages/rlm-repl:
     dependencies:
       isolated-vm:
