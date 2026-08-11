@@ -23,8 +23,13 @@ class FakeREPL implements CoreREPL {
     this.bindings.set(name, value);
   }
 
-  async execute(code: string, _opts?: { timeoutMs?: number }): Promise<CoreREPLResult> {
+  async execute(
+    code: string,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    _opts?: { timeoutMs?: number },
+  ): Promise<CoreREPLResult> {
     const start = Date.now();
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
     // Define helpers on globalThis so eval'd code can call them.
     (globalThis as Record<string, unknown>).PRINT = (x: unknown) => {
@@ -46,7 +51,6 @@ class FakeREPL implements CoreREPL {
       }
     }
     try {
-      // eslint-disable-next-line no-eval
       const expression = (0, eval)(code);
       // Harvest any new globals the user code defined. Skip built-ins
       // by excluding keys we already know about (bindings + helpers).

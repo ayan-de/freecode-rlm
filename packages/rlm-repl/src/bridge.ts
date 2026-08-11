@@ -38,11 +38,13 @@ const BRIDGE_SETUP = `
  */
 function bridgeCallback<T>(fn: (p: string) => Promise<T>): (p: string) => Promise<T> {
   return async (prompt: string) => {
+    // The try/catch wrapper around fn(prompt) is intentional: it observes
+    // the rejection on the host side before re-throwing so that ivm.Reference
+    // forwards it to the sandbox without triggering Node's unhandledRejection.
+    // eslint-disable-next-line no-useless-catch
     try {
       return await fn(prompt);
     } catch (e) {
-      // observed by host (no unhandledRejection), and re-thrown so
-      // ivm.Reference forwards the rejection to the sandbox caller.
       throw e;
     }
   };

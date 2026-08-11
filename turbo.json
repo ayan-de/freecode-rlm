@@ -7,6 +7,10 @@
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
       "outputs": [".next/**", "!.next/cache/**", "!.next/dev/**"]
     },
+    "test": {
+      "dependsOn": ["^build"],
+      "env": ["MINIMAX_API_KEY", "MINIMAX_BASE_URL", "OPENAI_API_KEY", "RLM_NIAH_DEBUG", "RLM_E2E_DEBUG"]
+    },
     "lint": {
       "dependsOn": ["^lint"]
     },

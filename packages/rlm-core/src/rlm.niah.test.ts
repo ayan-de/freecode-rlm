@@ -49,13 +49,9 @@ describe("RLM needle-in-the-haystack (requires MINIMAX_API_KEY)", () => {
         );
         if (process.env.RLM_NIAH_DEBUG) {
           // Surface what actually happened for live-run debugging.
-          // eslint-disable-next-line no-console
           console.error("[niah debug] finishedReason:", result.metadata.finishedReason);
-          // eslint-disable-next-line no-console
           console.error("[niah debug] iterations:", result.iterations.length);
-          // eslint-disable-next-line no-console
           console.error("[niah debug] final response:", JSON.stringify(result.response));
-          // eslint-disable-next-line no-console
           console.error(
             "[niah debug] last assistant:",
             JSON.stringify(result.iterations.at(-1)?.assistantMessage.content),

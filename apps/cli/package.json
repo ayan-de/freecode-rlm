@@ -19,6 +19,7 @@
     "commander": "^12.1.0"
   },
   "devDependencies": {
+    "@repo/eslint-config": "workspace:*",
     "@repo/typescript-config": "workspace:*",
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
