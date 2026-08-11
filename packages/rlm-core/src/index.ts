@@ -8,3 +8,5 @@ export type {
 export { RLMAbortError } from "./types.js";
 export { extractReplCode } from "./utils/code-extract.js";
 export { buildHistoryMessages } from "./utils/messages.js";
+export { BUILTIN_SYSTEM_PROMPT } from "./prompt.js";
+export { extractFinal, type ExtractedFinal } from "./final.js";
