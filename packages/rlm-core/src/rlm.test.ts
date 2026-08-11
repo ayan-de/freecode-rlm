@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { RLM } from "./rlm.js";
 import { MockLMClient } from "@freecode-rs/client";
+import { IsolatedVmREPL } from "@freecode-rs/repl";
 import type { CoreREPL, CoreREPLResult } from "./types.js";
 
 /**
@@ -173,5 +174,52 @@ describe("RLM (depth-0)", () => {
     const result = await rlm.completion("hi");
     expect(result.metadata.startedAt).toBeGreaterThanOrEqual(before);
     expect(result.metadata.finishedAt).toBeGreaterThanOrEqual(result.metadata.startedAt);
+  });
+});
+
+describe("RLM (bridge, recursion, budget)", () => {
+  it("llm_query inside the REPL is counted and answered", async () => {
+    const client = new MockLMClient([
+      // First call: model writes code that calls llm_query and returns its result.
+      { role: "assistant", content: "```repl\n(async () => FINAL(await llm_query('sub')))()\n```" },
+      // Second call (the sub-LLM's reply), used by llm_query.
+      { role: "assistant", content: "SUB-ANSWER" },
+    ]);
+    const repl = new IsolatedVmREPL();
+    const rlm = new RLM({ client, repl, maxSubCalls: 10 });
+    const result = await rlm.completion("top");
+    expect(result.response).toBe("SUB-ANSWER");
+    expect(result.metadata.totalSubCalls).toBe(1);
+    await repl.dispose();
+  });
+
+  it("sub-RLM is invoked when rlm_query is called", async () => {
+    const client = new MockLMClient([
+      // First call (root): spawn sub-RLM.
+      { role: "assistant", content: "```repl\n(async () => FINAL(await rlm_query('child prompt')))()\n```" },
+      // Sub-RLM (child) call:
+      { role: "assistant", content: "```repl\nFINAL('child answer')\n```" },
+    ]);
+    const repl = new IsolatedVmREPL();
+    const rlm = new RLM({ client, repl, maxDepth: 3, maxSubCalls: 10 });
+    const result = await rlm.completion("top");
+    expect(result.response).toBe("child answer");
+    expect(result.metadata.depthReached).toBe(1);
+    expect(result.metadata.totalSubCalls).toBe(1);
+    await repl.dispose();
+  });
+
+  it("maxSubCalls stops the run with finishedReason 'max_iterations'", async () => {
+    // A loop where llm_query is called every iteration and we never FINAL.
+    const client = new MockLMClient([
+      { role: "assistant", content: "```repl\n(async () => { await llm_query('1'); PRINT('go'); })()\n```" },
+      { role: "assistant", content: "```repl\n(async () => { await llm_query('2'); PRINT('go'); })()\n```" },
+    ]);
+    const repl = new IsolatedVmREPL();
+    const rlm = new RLM({ client, repl, maxSubCalls: 1, maxIterations: 5 });
+    const result = await rlm.completion("top");
+    // First iteration succeeds, second is blocked by budget on the sub-call.
+    expect(result.metadata.finishedReason).not.toBe("final");
+    await repl.dispose();
   });
 });
