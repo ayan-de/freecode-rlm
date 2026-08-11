@@ -66,3 +66,20 @@ describe("VercelAIClient", () => {
     expect(key2).toBe("oauth-token-2");
   });
 });
+
+describe("VercelAIClient (integration)", () => {
+  const apiKey = process.env.MINIMAX_API_KEY;
+  const baseURL = process.env.MINIMAX_BASE_URL ?? "https://api.minimax.io/v1";
+  const itIfKey = apiKey ? it : it.skip;
+
+  // Plan-deviation: spec said `gpt-5-nano` (an OpenAI model) and no baseURL.
+  // We use `MiniMax-M3` against the MiniMax OpenAI-compatible endpoint
+  // because the API key is the project's MiniMax key. Behaviour assertion
+  // is identical: a non-empty assistant reply that contains "ok".
+  itIfKey("reaches the API and returns a non-empty assistant message", async () => {
+    const c = new VercelAIClient({ model: "MiniMax-M3", apiKey, baseURL });
+    const reply = await c.chat([{ role: "user", content: "Reply with the single word: OK" }]);
+    expect(reply.role).toBe("assistant");
+    expect(reply.content.toLowerCase()).toContain("ok");
+  }, 30_000);
+});
