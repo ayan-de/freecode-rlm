@@ -22,6 +22,7 @@ export class IsolatedVmREPL implements REPL {
   private timeoutMs: number;
   private memoryMb: number;
   private stdout: string[] = [];
+  private bindings = new Map<string, unknown>();
 
   constructor(opts: REPLOptions = {}) {
     this.timeoutMs = opts.timeoutMs ?? 30_000;
@@ -32,34 +33,64 @@ export class IsolatedVmREPL implements REPL {
     setupScript.runSync(this.context, { timeout: 1000 });
   }
 
-  async load(_name: string, _value: unknown): Promise<void> {
-    throw new Error("not implemented");
+  async load(name: string, value: unknown): Promise<void> {
+    this.bindings.set(name, value);
+    // JSON path — functions/undefineds are dropped. Push onto globalThis so
+    // user code can reference the name directly (e.g. load('x', 42); execute('x*2')).
+    const json = JSON.stringify(value, (_k, v) => (typeof v === "function" ? undefined : v));
+    const decl = `globalThis[${JSON.stringify(name)}] = ${json};`;
+    const script = this.isolate.compileScriptSync(decl);
+    script.runSync(this.context, { timeout: 1000 });
   }
 
   async execute(code: string, opts?: { timeoutMs?: number }): Promise<REPLResult> {
     const timeout = opts?.timeoutMs ?? this.timeoutMs;
     const start = Date.now();
+    // Wrap user code so we capture the final expression AND the sandbox-side __stdout
+    // after execution. We use a function wrapper that returns both, then transfer the
+    // captured stdout back to the host via copy: true.
+    const wrapper =
+      "(function() {" +
+      "  const __capturedStdout = [];" +
+      "  const __origPush = __stdout.push.bind(__stdout);" +
+      "  __stdout.push = (...args) => { __capturedStdout.push(args.map(a =>" +
+      "    typeof a === 'string' ? a : JSON.stringify(a)" +
+      "  ).join(' ')); return __origPush(...args); };" +
+      "  try {" +
+      "    const __result = eval(__USER_CODE__);" +
+      "    return { success: true, value: __result, captured: __capturedStdout };" +
+      "  } catch (e) {" +
+      "    return { success: false, error: { name: e.name, message: e.message, stack: e.stack || '' }, captured: __capturedStdout };" +
+      "  }" +
+      "})()";
+    const scriptSrc = wrapper.replace("__USER_CODE__", JSON.stringify(code));
     try {
-      const wrapped =
-        "(() => { let __last; try { __last = eval(__USER_CODE__); } " +
-        "catch (e) { throw e; } return { __last, __stdout }; })()";
-      const scriptSrc = wrapped.replace("__USER_CODE__", JSON.stringify(code));
       const script = this.isolate.compileScriptSync(scriptSrc);
-      const resultRef = (await script.run(this.context, {
+      const ref = (await script.run(this.context, {
         timeout,
         promise: true,
         copy: true,
-      })) as { __last: unknown; __stdout: string[] };
-      const combined = resultRef.__stdout;
-      for (const line of combined) this.stdout.push(line);
+      })) as
+        | { success: true; value: unknown; captured: string[] }
+        | { success: false; error: { name: string; message: string; stack: string }; captured: string[] };
+      for (const line of ref.captured) this.stdout.push(line);
+      if (ref.success) {
+        return {
+          success: true,
+          stdout: [...ref.captured],
+          expression: ref.value,
+          durationMs: Date.now() - start,
+        };
+      }
       return {
-        success: true,
-        stdout: [...combined],
-        expression: resultRef.__last,
+        success: false,
+        stdout: [...ref.captured],
+        error: ref.error,
         durationMs: Date.now() - start,
       };
     } catch (e: unknown) {
       const err = e as { name?: string; message?: string; stack?: string };
+      // isolated-vm timeout throws "Script execution timed out."
       return {
         success: false,
         stdout: [...this.stdout],
@@ -78,7 +109,9 @@ export class IsolatedVmREPL implements REPL {
   }
 
   async inspect(): Promise<Record<string, unknown>> {
-    throw new Error("not implemented");
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of this.bindings) out[k] = v;
+    return out;
   }
 
   async dispose(): Promise<void> {
