@@ -13,6 +13,9 @@
     "lint": "eslint src"
   },
   "dependencies": {
+    "@freecode-rs/core": "workspace:*",
+    "@freecode-rs/client": "workspace:*",
+    "@freecode-rs/repl": "workspace:*",
     "commander": "^12.1.0"
   },
   "devDependencies": {

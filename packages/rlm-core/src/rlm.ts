@@ -144,8 +144,11 @@ export class RLM {
     return {
       response:
         finalAnswer ??
-        iterations[iterations.length - 1]?.assistantMessage.content ??
-        "",
+        // Strip <think>...</think> blocks when the model falls through to a
+        // plain-text "final answer" — keeps CLI output clean.
+        stripThink(
+          iterations[iterations.length - 1]?.assistantMessage.content ?? "",
+        ),
       iterations,
       metadata: {
         startedAt,
@@ -199,6 +202,13 @@ export class RLM {
       await childRepl.dispose();
     }
   }
+}
+
+// Some models prefix their plain-text responses with a <think>...</think>
+// block before giving the final answer. Strip it so callers (notably the
+// CLI) get a clean answer.
+function stripThink(s: string): string {
+  return s.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 }
 
 // Re-export so external imports only need @freecode-rs/core

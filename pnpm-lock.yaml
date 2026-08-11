@@ -20,6 +20,15 @@ importers:
 
   apps/cli:
     dependencies:
+      '@freecode-rs/client':
+        specifier: workspace:*
+        version: link:../../packages/rlm-client
+      '@freecode-rs/core':
+        specifier: workspace:*
+        version: link:../../packages/rlm-core
+      '@freecode-rs/repl':
+        specifier: workspace:*
+        version: link:../../packages/rlm-repl
       commander:
         specifier: ^12.1.0
         version: 12.1.0
