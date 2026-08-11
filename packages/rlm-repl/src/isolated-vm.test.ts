@@ -77,4 +77,20 @@ describe("IsolatedVmREPL.execute", () => {
     // isolated-vm throws "Script execution timed out." on timeout.
     expect(r.error?.message).toMatch(/timeout|timed|terminated/i);
   });
+
+  it("awaits a returned Promise so async IIFEs resolve to their value", async () => {
+    repl = new IsolatedVmREPL();
+    const r = await repl.execute("(async () => { return await Promise.resolve(99); })()");
+    expect(r.success).toBe(true);
+    expect(r.expression).toBe(99);
+  });
+
+  it("captures rejected Promise as success=false with the rejection reason", async () => {
+    repl = new IsolatedVmREPL();
+    const r = await repl.execute(
+      "(async () => { throw new Error('async-boom'); })()",
+    );
+    expect(r.success).toBe(false);
+    expect(r.error?.message).toBe("async-boom");
+  });
 });

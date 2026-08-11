@@ -50,7 +50,7 @@ export class IsolatedVmREPL implements REPL {
     // after execution. We use a function wrapper that returns both, then transfer the
     // captured stdout back to the host via copy: true.
     const wrapper =
-      "(function() {" +
+      "(async function() {" +
       "  const __capturedStdout = [];" +
       "  const __origPush = __stdout.push.bind(__stdout);" +
       "  __stdout.push = (...args) => { __capturedStdout.push(args.map(a =>" +
@@ -58,9 +58,9 @@ export class IsolatedVmREPL implements REPL {
       "  ).join(' ')); return __origPush(...args); };" +
       "  try {" +
       "    const __result = eval(__USER_CODE__);" +
-      "    return { success: true, value: __result, captured: __capturedStdout };" +
+      "    return { success: true, value: await __result, captured: __capturedStdout };" +
       "  } catch (e) {" +
-      "    return { success: false, error: { name: e.name, message: e.message, stack: e.stack || '' }, captured: __capturedStdout };" +
+      "    return { success: false, error: { name: e.name, message: e.message, trace: e.stack || '' }, captured: __capturedStdout };" +
       "  }" +
       "})()";
     const scriptSrc = wrapper.replace("__USER_CODE__", JSON.stringify(code));
@@ -72,7 +72,7 @@ export class IsolatedVmREPL implements REPL {
         copy: true,
       })) as
         | { success: true; value: unknown; captured: string[] }
-        | { success: false; error: { name: string; message: string; stack: string }; captured: string[] };
+        | { success: false; error: { name: string; message: string; trace: string }; captured: string[] };
       for (const line of ref.captured) this.stdout.push(line);
       if (ref.success) {
         return {

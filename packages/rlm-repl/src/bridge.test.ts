@@ -1,0 +1,46 @@
+import { describe, it, expect, afterEach } from "vitest";
+import { installBridge, IsolatedVmREPL } from "./index.js";
+
+describe("installBridge", () => {
+  let repl: IsolatedVmREPL;
+  afterEach(async () => {
+    await repl?.dispose();
+  });
+
+  it("exposes llm_query and rlm_query into the sandbox", async () => {
+    repl = new IsolatedVmREPL();
+    const calls: string[] = [];
+    installBridge(repl, {
+      llmQuery: async (prompt: string) => {
+        calls.push(`llm:${prompt}`);
+        return "L";
+      },
+      rlmQuery: async (prompt: string) => {
+        calls.push(`rlm:${prompt}`);
+        return "R";
+      },
+    });
+    const r1 = await repl.execute("(async () => await llm_query('hi'))()");
+    expect(r1.success).toBe(true);
+    expect(r1.expression).toBe("L");
+    const r2 = await repl.execute("(async () => await rlm_query('there'))()");
+    expect(r2.success).toBe(true);
+    expect(r2.expression).toBe("R");
+    expect(calls).toEqual(["llm:hi", "rlm:there"]);
+  });
+
+  it("llm_query errors propagate into the sandbox", async () => {
+    repl = new IsolatedVmREPL();
+    installBridge(repl, {
+      llmQuery: async () => {
+        throw new Error("kaboom");
+      },
+      rlmQuery: async () => "",
+    });
+    const r = await repl.execute(
+      "(async () => { try { await llm_query('x'); } catch (e) { return e.message; } })()",
+    );
+    expect(r.success).toBe(true);
+    expect(r.expression).toBe("kaboom");
+  });
+});
