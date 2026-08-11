@@ -22,42 +22,64 @@ const errIter: Iteration = {
 };
 
 describe("buildHistoryMessages", () => {
-  it("starts with system prompt and emits one user message per iteration", () => {
+  it("starts with system prompt, then user prompt, then one user message per iteration", () => {
     const out = buildHistoryMessages({
       systemPrompt: "SYS",
+      userPrompt: "find the answer",
       iterations: [okIter],
     });
-    expect(out).toHaveLength(2);
+    expect(out).toHaveLength(3);
     expect(out[0]).toEqual({ role: "system", content: "SYS" });
-    expect(out[1]?.role).toBe("user");
-    expect(out[1]?.content).toContain("hi");
-    expect(out[1]?.content).toContain("Result:");
+    expect(out[1]).toEqual({ role: "user", content: "find the answer" });
+    expect(out[2]?.role).toBe("user");
+    expect(out[2]?.content).toContain("hi");
+    expect(out[2]?.content).toContain("Result:");
   });
 
   it("formats successful results with stdout and expression", () => {
-    const out = buildHistoryMessages({ systemPrompt: "S", iterations: [okIter] });
-    const resultMsg = out[1];
+    const out = buildHistoryMessages({
+      systemPrompt: "S",
+      userPrompt: "U",
+      iterations: [okIter],
+    });
+    const resultMsg = out[2];
     expect(resultMsg?.content).toContain("stdout:");
     expect(resultMsg?.content).toContain("a\nb");
     expect(resultMsg?.content).toContain("expression: 1");
   });
 
   it("formats failed results with error message and trace", () => {
-    const out = buildHistoryMessages({ systemPrompt: "S", iterations: [errIter] });
-    const resultMsg = out[1];
+    const out = buildHistoryMessages({
+      systemPrompt: "S",
+      userPrompt: "U",
+      iterations: [errIter],
+    });
+    const resultMsg = out[2];
     expect(resultMsg?.content).toContain("error: x is not defined");
     expect(resultMsg?.content).toContain("trace: at line 1");
   });
 
-  it("returns just the system prompt when there are no iterations", () => {
-    const out = buildHistoryMessages({ systemPrompt: "S", iterations: [] });
-    expect(out).toEqual([{ role: "system", content: "S" }]);
+  it("returns system + user prompt when there are no iterations", () => {
+    const out = buildHistoryMessages({
+      systemPrompt: "S",
+      userPrompt: "U",
+      iterations: [],
+    });
+    expect(out).toEqual([
+      { role: "system", content: "S" },
+      { role: "user", content: "U" },
+    ]);
   });
 
   it("emits one combined user message per iteration when there are multiple", () => {
-    const out = buildHistoryMessages({ systemPrompt: "S", iterations: [okIter, errIter] });
-    expect(out).toHaveLength(3);
-    expect(out[1]?.content).toContain("hi");
-    expect(out[2]?.content).toContain("error: x is not defined");
+    const out = buildHistoryMessages({
+      systemPrompt: "S",
+      userPrompt: "U",
+      iterations: [okIter, errIter],
+    });
+    expect(out).toHaveLength(4);
+    expect(out[1]).toEqual({ role: "user", content: "U" });
+    expect(out[2]?.content).toContain("hi");
+    expect(out[3]?.content).toContain("error: x is not defined");
   });
 });

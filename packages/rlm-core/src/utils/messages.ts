@@ -3,9 +3,13 @@ import type { Iteration } from "../types.js";
 
 export function buildHistoryMessages(args: {
   systemPrompt: string;
+  userPrompt: string;
   iterations: Iteration[];
 }): ChatMessage[] {
-  const out: ChatMessage[] = [{ role: "system", content: args.systemPrompt }];
+  const out: ChatMessage[] = [
+    { role: "system", content: args.systemPrompt },
+    { role: "user", content: args.userPrompt },
+  ];
   for (const it of args.iterations) {
     out.push({
       role: "user",

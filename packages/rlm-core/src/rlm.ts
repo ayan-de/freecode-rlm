@@ -25,6 +25,7 @@ export class RLM {
   private readonly verbose: boolean;
   private readonly currentDepth: number;
   private readonly budget: Budget;
+  private userPrompt = "";
   private maxDepthSeen = 0;
 
   constructor(
@@ -48,6 +49,7 @@ export class RLM {
 
   async completion(prompt: string): Promise<RLMResult> {
     const startedAt = Date.now();
+    this.userPrompt = prompt;
     await this.repl.load("context", prompt);
 
     // FINAL/PRINT/FINAL_VAR and the host bridge are injected into the sandbox
@@ -74,6 +76,7 @@ export class RLM {
       }
       const messages = buildHistoryMessages({
         systemPrompt: this.systemPrompt,
+        userPrompt: this.userPrompt,
         iterations,
       });
       let assistantMessage: ChatMessage;
