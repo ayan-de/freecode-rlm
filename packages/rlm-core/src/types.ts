@@ -40,6 +40,11 @@ export interface Iteration {
 export interface RLMResult {
   response: string;
   iterations: Iteration[];
+  // Full non-system conversation so far (prior history + this turn's user
+  // prompt + this turn's iteration exchanges). Pass back as
+  // `completion(prompt, { history: result.messages })` to continue the
+  // conversation across multiple completion() calls.
+  messages: ChatMessage[];
   metadata: {
     startedAt: number;
     finishedAt: number;

@@ -56,8 +56,12 @@ export class RLM {
       });
   }
 
-  async completion(prompt: string, opts?: { context?: string }): Promise<RLMResult> {
+  async completion(
+    prompt: string,
+    opts?: { context?: string; history?: ChatMessage[] },
+  ): Promise<RLMResult> {
     const startedAt = Date.now();
+    const history = opts?.history ?? [];
     this.userPrompt = prompt;
     // Default: the prompt itself is loaded as `context`. Callers can override
     // via opts.context when they want a short user-facing prompt with a
@@ -95,6 +99,7 @@ export class RLM {
       }
       const messages = buildHistoryMessages({
         systemPrompt: this.systemPrompt,
+        history,
         userPrompt: this.userPrompt,
         iterations,
       });
@@ -170,6 +175,15 @@ export class RLM {
           iterations[iterations.length - 1]?.assistantMessage.content ?? "",
         ),
       iterations,
+      // Everything after the system prompt: prior history + this turn's
+      // user prompt + this turn's iteration exchanges. Feed straight back
+      // in as the next call's opts.history to keep the conversation going.
+      messages: buildHistoryMessages({
+        systemPrompt: this.systemPrompt,
+        history,
+        userPrompt: this.userPrompt,
+        iterations,
+      }).slice(1),
       metadata: {
         startedAt,
         finishedAt: Date.now(),

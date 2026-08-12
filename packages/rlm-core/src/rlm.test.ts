@@ -127,6 +127,27 @@ describe("RLM (depth-0)", () => {
     expect(result.response).toContain("2+2");
   });
 
+  it("carries conversation history forward via result.messages", async () => {
+    const client = new MockLMClient([
+      { role: "assistant", content: "```repl\nFINAL('first')\n```" },
+      { role: "assistant", content: "```repl\nFINAL('second')\n```" },
+    ]);
+    const repl = new FakeREPL();
+    const rlm = new RLM({ client, repl });
+    const first = await rlm.completion("turn one");
+    expect(first.messages).toEqual([
+      { role: "user", content: "turn one" },
+      expect.objectContaining({ role: "user" }), // the iteration exchange
+    ]);
+
+    await rlm.completion("turn two", { history: first.messages });
+    const secondCallMessages = client.calls[1]!;
+    // system + prior history (2 msgs) + new user prompt
+    expect(secondCallMessages).toHaveLength(4);
+    expect(secondCallMessages[1]).toEqual({ role: "user", content: "turn one" });
+    expect(secondCallMessages[3]).toEqual({ role: "user", content: "turn two" });
+  });
+
   it("loads the prompt as `context` in the REPL", async () => {
     const client = new MockLMClient([
       { role: "assistant", content: "```repl\nFINAL(context)\n```" },

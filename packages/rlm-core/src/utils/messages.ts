@@ -3,11 +3,16 @@ import type { Iteration } from "../types.js";
 
 export function buildHistoryMessages(args: {
   systemPrompt: string;
+  // Prior turns' messages (as returned by a previous RLMResult.messages),
+  // spliced in between the system prompt and this turn's user prompt so a
+  // caller can carry a multi-turn conversation forward.
+  history?: ChatMessage[];
   userPrompt: string;
   iterations: Iteration[];
 }): ChatMessage[] {
   const out: ChatMessage[] = [
     { role: "system", content: args.systemPrompt },
+    ...(args.history ?? []),
     { role: "user", content: args.userPrompt },
   ];
   for (const it of args.iterations) {
