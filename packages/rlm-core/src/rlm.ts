@@ -1,3 +1,6 @@
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
+import * as fs from "node:fs/promises";
 import type { ChatMessage } from "@freecode-rs/client";
 import {
   installBridge,
@@ -10,11 +13,13 @@ import type {
   RLMOptions,
   RLMResult,
 } from "./types.js";
-import { BUILTIN_SYSTEM_PROMPT } from "./prompt.js";
+import { buildSystemPrompt } from "./prompt.js";
 import { extractReplCode } from "./utils/code-extract.js";
 import { buildHistoryMessages } from "./utils/messages.js";
 import { extractFinal, extractFinalFromText } from "./final.js";
 import { Budget, BudgetExceededError } from "./budget.js";
+
+const execAsync = promisify(exec);
 
 export class RLM {
   private readonly client: RLMOptions["client"];
@@ -25,6 +30,7 @@ export class RLM {
   private readonly verbose: boolean;
   private readonly currentDepth: number;
   private readonly budget: Budget;
+  private readonly enableSystemTools: boolean;
   private userPrompt = "";
   private maxDepthSeen = 0;
 
@@ -34,10 +40,13 @@ export class RLM {
   ) {
     this.client = opts.client;
     this.repl = opts.repl;
-    this.systemPrompt = opts.systemPrompt ?? BUILTIN_SYSTEM_PROMPT;
     this.maxDepth = opts.maxDepth ?? 3;
     this.maxIterations = opts.maxIterations ?? 50;
     this.verbose = opts.verbose ?? false;
+    this.enableSystemTools = opts.enableSystemTools ?? false;
+    this.systemPrompt =
+      opts.systemPrompt ??
+      buildSystemPrompt({ enableSystemTools: this.enableSystemTools });
     this.currentDepth = internal?.currentDepth ?? 0;
     this.budget =
       internal?.budget ??
@@ -63,6 +72,13 @@ export class RLM {
       installBridge(this.repl, {
         llmQuery: (p) => this.callLlm(p),
         rlmQuery: (p) => this.callRlm(p),
+        ...(this.enableSystemTools
+          ? {
+              bash: (cmd: string) => this.callBash(cmd),
+              readFile: (path: string) => fs.readFile(path, "utf8"),
+              writeFile: (path: string, content: string) => fs.writeFile(path, content, "utf8"),
+            }
+          : {}),
       });
     }
 
@@ -164,6 +180,25 @@ export class RLM {
     };
   }
 
+  private async callBash(
+    command: string,
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    try {
+      const { stdout, stderr } = await execAsync(command, {
+        timeout: 30_000,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+      return { stdout, stderr, exitCode: 0 };
+    } catch (e) {
+      const err = e as { stdout?: string; stderr?: string; code?: number };
+      return {
+        stdout: err.stdout ?? "",
+        stderr: err.stderr ?? String(e),
+        exitCode: err.code ?? 1,
+      };
+    }
+  }
+
   private async callLlm(prompt: string): Promise<string> {
     // Budget check first; throws BudgetExceededError which propagates as a
     // rejection inside the sandbox IIFE.
@@ -196,6 +231,7 @@ export class RLM {
         maxDepth: this.maxDepth,
         maxIterations: this.maxIterations,
         verbose: this.verbose,
+        enableSystemTools: this.enableSystemTools,
       },
       { currentDepth: this.currentDepth + 1, budget: this.budget },
     );

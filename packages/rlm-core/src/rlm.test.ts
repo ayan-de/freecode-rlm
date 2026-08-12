@@ -226,4 +226,29 @@ describe("RLM (bridge, recursion, budget)", () => {
     expect(result.metadata.finishedReason).not.toBe("final");
     await repl.dispose();
   });
+
+  it("bash/readFile/writeFile are undefined in the REPL by default", async () => {
+    const client = new MockLMClient([
+      {
+        role: "assistant",
+        content: "```repl\nFINAL(String(typeof bash) + ',' + String(typeof readFile))\n```",
+      },
+    ]);
+    const repl = new IsolatedVmREPL();
+    const rlm = new RLM({ client, repl });
+    const result = await rlm.completion("top");
+    expect(result.response).toBe("undefined,undefined");
+    await repl.dispose();
+  });
+
+  it("bash runs a real shell command when enableSystemTools is true", async () => {
+    const client = new MockLMClient([
+      { role: "assistant", content: "```repl\n(async () => FINAL((await bash('echo hi')).stdout.trim()))()\n```" },
+    ]);
+    const repl = new IsolatedVmREPL();
+    const rlm = new RLM({ client, repl, enableSystemTools: true });
+    const result = await rlm.completion("top");
+    expect(result.response).toBe("hi");
+    await repl.dispose();
+  });
 });

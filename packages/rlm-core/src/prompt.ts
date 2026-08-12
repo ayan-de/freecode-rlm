@@ -15,3 +15,16 @@ Rules:
 3. Use \`llm_query\` for one-shot classification/extraction; use \`rlm_query\` when the sub-task itself needs decomposition.
 4. Call \`FINAL("...")\` or \`FINAL_VAR("...")\` when you have the answer. Until then, write more code.
 5. Stay terse. No explanations in chat unless asked — do the work in the REPL.`;
+
+const SYSTEM_TOOLS_ADDENDUM = `
+
+You also have host system access:
+- \`bash(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }>\` — run a shell command on the host.
+- \`readFile(path: string): Promise<string>\` — read a file's contents.
+- \`writeFile(path: string, content: string): Promise<void>\` — write a file's contents.`;
+
+export function buildSystemPrompt(opts?: { enableSystemTools?: boolean }): string {
+  return opts?.enableSystemTools
+    ? BUILTIN_SYSTEM_PROMPT + SYSTEM_TOOLS_ADDENDUM
+    : BUILTIN_SYSTEM_PROMPT;
+}

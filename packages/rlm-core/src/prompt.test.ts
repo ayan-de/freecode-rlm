@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { BUILTIN_SYSTEM_PROMPT } from "./prompt.js";
+import { BUILTIN_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt.js";
 
 describe("BUILTIN_SYSTEM_PROMPT", () => {
   it("mentions llm_query, rlm_query, PRINT, FINAL, FINAL_VAR", () => {
@@ -12,5 +12,18 @@ describe("BUILTIN_SYSTEM_PROMPT", () => {
 
   it("warns against reading context directly", () => {
     expect(BUILTIN_SYSTEM_PROMPT.toLowerCase()).toContain("do not read");
+  });
+});
+
+describe("buildSystemPrompt", () => {
+  it("omits bash/readFile/writeFile by default", () => {
+    expect(buildSystemPrompt()).not.toMatch(/bash\(/);
+  });
+
+  it("mentions bash/readFile/writeFile when enableSystemTools is true", () => {
+    const prompt = buildSystemPrompt({ enableSystemTools: true });
+    expect(prompt).toMatch(/bash\(/);
+    expect(prompt).toMatch(/readFile\(/);
+    expect(prompt).toMatch(/writeFile\(/);
   });
 });

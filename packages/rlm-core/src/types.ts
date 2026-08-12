@@ -24,6 +24,10 @@ export interface RLMOptions {
   maxIterations?: number;
   maxSubCalls?: number;
   verbose?: boolean;
+  // Exposes bash()/readFile()/writeFile() in the REPL, giving the model
+  // shell and filesystem access on the host machine. Off by default since
+  // it lets model-written code run arbitrary commands.
+  enableSystemTools?: boolean;
 }
 
 export interface Iteration {
