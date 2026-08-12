@@ -1,26 +1,26 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { run } from "./index.js";
 
 describe("cli", () => {
-  it("prints usage error when no prompt is given and exits 2", async () => {
-    const errs: string[] = [];
-    const origWrite = process.stderr.write.bind(process.stderr);
-    // Capture stderr writes so we can assert on the user-facing error.
-    (process.stderr as { write: typeof process.stderr.write }).write = ((
-      chunk: string | Uint8Array,
-      ...rest: unknown[]
-    ): boolean => {
-      errs.push(typeof chunk === "string" ? chunk : chunk.toString());
-      // Pass through to the real stream so test output stays visible.
-      return (origWrite as (c: string | Uint8Array, ...rest: unknown[]) => boolean)(chunk, ...rest);
-    }) as typeof process.stderr.write;
+  // No prompt argument now means "enter interactive mode" rather than a
+  // usage error (see runInteractive in index.ts). The API key check still
+  // runs first, so omitting both surfaces that error and exits 2.
+  it("prints an API key error when no prompt/key is given and exits 2", async () => {
+    const origKey = process.env.MINIMAX_API_KEY;
+    const origHome = process.env.HOME;
+    delete process.env.MINIMAX_API_KEY;
+    // Point HOME at a dir with no ~/.freecode/config.json so the fallback
+    // lookup also misses and the "no API key" path actually fires.
+    process.env.HOME = "/nonexistent-freecode-rlm-test-home";
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const code = await run([]);
       expect(code).toBe(2);
-      expect(errs.join(" ")).toContain("prompt");
+      expect(errSpy.mock.calls.flat().join(" ")).toContain("API key");
     } finally {
-      (process.stderr as { write: typeof process.stderr.write }).write =
-        origWrite;
+      errSpy.mockRestore();
+      if (origKey !== undefined) process.env.MINIMAX_API_KEY = origKey;
+      if (origHome !== undefined) process.env.HOME = origHome;
     }
   });
 });

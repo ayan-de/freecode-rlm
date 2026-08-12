@@ -1,8 +1,97 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { RLM } from "@freecode-rs/core";
-import { VercelAIClient } from "@freecode-rs/client";
+import { RLM, type RLMResult } from "@freecode-rs/core";
+import { VercelAIClient, type LMClient } from "@freecode-rs/client";
 import { IsolatedVmREPL } from "@freecode-rs/repl";
+import * as readline from "node:readline/promises";
+
+// Fallback API key source shared with the sibling `freecode` project's config.
+async function readFreecodeApiKey(): Promise<string | undefined> {
+  try {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const raw = await fs.readFile(
+      path.join(os.homedir(), ".freecode", "config.json"),
+      "utf8",
+    );
+    const config = JSON.parse(raw) as {
+      providers?: Record<string, { apiKey?: string }>;
+    };
+    return config.providers?.minimax?.apiKey;
+  } catch {
+    return undefined;
+  }
+}
+
+const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
+const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
+const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
+const yellow = (s: string) => `\x1b[33m${s}\x1b[0m`;
+
+// Minimal trace of what the RLM did, printed after each turn.
+// ponytail: no live streaming (RLM.completion only resolves iterations at
+// the end) — add a per-iteration callback in rlm-core if live output is needed.
+function printTrace(result: RLMResult): void {
+  for (const it of result.iterations) {
+    const code = it.replResult.stdout.length
+      ? it.replResult.stdout.join("\n")
+      : undefined;
+    process.stdout.write(dim(`  [${it.index}] `));
+    if (code) process.stdout.write(dim(`repl -> ${truncate(code)}\n`));
+    else process.stdout.write(dim("(no repl output)\n"));
+  }
+  process.stdout.write(
+    dim(
+      `  done: ${result.metadata.finishedReason}, ${result.iterations.length} iteration(s), ${result.metadata.totalSubCalls} sub-call(s)\n`,
+    ),
+  );
+}
+
+function truncate(s: string, n = 200): string {
+  return s.length > n ? s.slice(0, n) + "…" : s;
+}
+
+async function runInteractive(
+  client: LMClient,
+  opts: RunOptions,
+): Promise<number> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  process.stdout.write(cyan("freecode-rlm") + dim(" — interactive mode (Ctrl+D to exit)\n"));
+  try {
+    for (;;) {
+      const line = await rl.question(green("> "));
+      if (!line.trim()) continue;
+      const repl = new IsolatedVmREPL({
+        timeoutMs: Number(opts.replTimeoutMs),
+        memoryMb: Number(opts.replMemoryMb),
+      });
+      const rlm = new RLM({
+        client,
+        repl,
+        maxDepth: Number(opts.maxDepth),
+        maxIterations: Number(opts.maxIterations),
+        maxSubCalls: Number(opts.maxSubCalls),
+        verbose: opts.verbose,
+      });
+      try {
+        const result = await rlm.completion(line);
+        if (opts.verbose) printTrace(result);
+        process.stdout.write(yellow(result.response) + "\n");
+      } catch (e) {
+        process.stderr.write(`error: ${(e as Error).message}\n`);
+      } finally {
+        await repl.dispose();
+      }
+    }
+  } catch {
+    // rl.question rejects on Ctrl+D (stream close) — treat as clean exit.
+  } finally {
+    rl.close();
+  }
+  process.stdout.write("\n");
+  return 0;
+}
 
 export interface RunOptions {
   model: string;
@@ -37,7 +126,7 @@ export async function run(args: string[]): Promise<number> {
     .name("freecode-rlm")
     .description("Recursive Language Model CLI")
     .version("0.0.0")
-    .argument("<prompt>", "the prompt to send to the RLM")
+    .argument("[prompt]", "the prompt to send to the RLM (omit for interactive mode)")
     // Plan-deviation: default model is MiniMax-M3 (project default) rather
     // than `gpt-5-nano`. The OpenAI-compatible baseURL and the API key (read
     // from MINIMAX_API_KEY if --api-key is not passed) target the MiniMax
@@ -60,18 +149,11 @@ export async function run(args: string[]): Promise<number> {
     .option("--repl-memory-mb <n>", "isolated-vm memory limit", "256")
     .option("-v, --verbose", "verbose logging", false);
 
-  let prompt: string;
+  let prompt: string | undefined;
   let opts: RunOptions;
   try {
     program.parse(["node", "freecode-rlm", ...args]);
-    const got = program.args[0];
-    if (!got) {
-      // Defensive: commander's required-argument check fires inside
-      // program.parse() first, so this branch is unreachable in practice.
-      process.stderr.write("error: prompt argument is required\n");
-      return 2;
-    }
-    prompt = got;
+    prompt = program.args[0];
     opts = program.opts<RunOptions>();
   } catch {
     // CommanderError from exitOverride (missing argument, bad flag, etc).
@@ -82,10 +164,13 @@ export async function run(args: string[]): Promise<number> {
     return 2;
   }
 
-  const apiKey = opts.apiKey ?? process.env.MINIMAX_API_KEY;
+  const apiKey =
+    opts.apiKey ??
+    process.env.MINIMAX_API_KEY ??
+    (await readFreecodeApiKey());
   if (!apiKey) {
     console.error(
-      "error: API key not set. Pass --api-key or set MINIMAX_API_KEY.",
+      "error: API key not set. Pass --api-key, set MINIMAX_API_KEY, or configure ~/.freecode/config.json.",
     );
     return 2;
   }
@@ -114,6 +199,11 @@ export async function run(args: string[]): Promise<number> {
     apiKey,
     baseURL: opts.baseUrl,
   });
+
+  if (!prompt) {
+    return runInteractive(client, opts);
+  }
+
   const repl = new IsolatedVmREPL({
     timeoutMs: Number(opts.replTimeoutMs),
     memoryMb: Number(opts.replMemoryMb),
