@@ -5,6 +5,12 @@ A Recursive Language Model (RLM) runtime in TypeScript.
 The LLM writes JavaScript inside a sandboxed REPL; it can inspect a large
 context programmatically and call sub-LM or sub-RLM functions.
 
+## References
+
+- Paper: [Recursive Language Models](https://arxiv.org/abs/2512.24601) (Zhang, Kraska, Khattab)
+- Author write-up: https://alexzhang13.github.io/blog/2025/rlm/
+- Official implementation: https://github.com/alexzhang13/rlm
+
 ## Quickstart
 
 ```bash
