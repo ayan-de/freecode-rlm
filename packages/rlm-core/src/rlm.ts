@@ -13,7 +13,7 @@ import type {
 import { BUILTIN_SYSTEM_PROMPT } from "./prompt.js";
 import { extractReplCode } from "./utils/code-extract.js";
 import { buildHistoryMessages } from "./utils/messages.js";
-import { extractFinal } from "./final.js";
+import { extractFinal, extractFinalFromText } from "./final.js";
 import { Budget, BudgetExceededError } from "./budget.js";
 
 export class RLM {
@@ -107,14 +107,18 @@ export class RLM {
 
       const code = extractReplCode(assistantMessage.content);
       if (!code) {
-        // Model didn't emit any code. Record and stop (treat last text as answer).
+        // No code block. Still honor a plain-text FINAL(...)/FINAL_VAR(...)
+        // (matches reference find_final_answer), else fall back to raw text.
         iterations.push({
           index: i,
           assistantMessage,
           replResult: { success: true, stdout: [], durationMs: 0 },
           subCallsAtStart: this.budget.subCalls,
         });
-        finalAnswer = assistantMessage.content;
+        const textFinal = await extractFinalFromText(assistantMessage.content, () =>
+          this.repl.inspect(),
+        );
+        finalAnswer = textFinal ? textFinal.answer : assistantMessage.content;
         finishedReason = "final";
         break;
       }

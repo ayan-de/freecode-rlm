@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { extractFinal } from "./final.js";
+import { extractFinal, extractFinalFromText } from "./final.js";
 
 describe("extractFinal", () => {
   it("returns the string for FINAL('hello')", async () => {
@@ -57,5 +57,24 @@ describe("extractFinal", () => {
       inspect,
     );
     expect(inspect).not.toHaveBeenCalled();
+  });
+});
+
+describe("extractFinalFromText", () => {
+  it("parses FINAL(...) written as plain text with no code block", async () => {
+    const out = await extractFinalFromText("Here's my answer.\nFINAL(42)", async () => ({}));
+    expect(out).toEqual({ kind: "final", answer: "42" });
+  });
+
+  it("resolves FINAL_VAR(name) via inspect()", async () => {
+    const out = await extractFinalFromText("FINAL_VAR('result')", async () => ({
+      result: "the answer",
+    }));
+    expect(out).toEqual({ kind: "final", answer: "the answer" });
+  });
+
+  it("returns null when neither pattern is present", async () => {
+    const out = await extractFinalFromText("just some prose", async () => ({}));
+    expect(out).toBeNull();
   });
 });

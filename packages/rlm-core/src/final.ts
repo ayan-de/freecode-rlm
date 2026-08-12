@@ -24,6 +24,25 @@ export async function extractFinal(
   return null;
 }
 
+// Fallback for models that write FINAL(...)/FINAL_VAR(...) as plain text
+// instead of calling them as REPL functions (matches reference find_final_answer).
+export async function extractFinalFromText(
+  text: string,
+  inspect: () => Promise<Record<string, unknown>>,
+): Promise<ExtractedFinal> {
+  const varMatch = /^\s*FINAL_VAR\((.*?)\)/ms.exec(text);
+  if (varMatch?.[1] !== undefined) {
+    const name = varMatch[1].trim().replace(/^['"]|['"]$/g, "");
+    const scope = await inspect();
+    return { kind: "final", answer: stringify(scope[name]) };
+  }
+  const finalMatch = /^\s*FINAL\((.*?)\)/ms.exec(text);
+  if (finalMatch?.[1] !== undefined) {
+    return { kind: "final", answer: finalMatch[1].trim() };
+  }
+  return null;
+}
+
 function stringify(v: unknown): string {
   if (typeof v === "string") return v;
   if (v === undefined) return "undefined";
