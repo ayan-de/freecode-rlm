@@ -8,11 +8,15 @@ export async function extractFinal(
   result: CoreREPLResult,
   inspect: () => Promise<Record<string, unknown>>,
 ): Promise<ExtractedFinal> {
-  const expr = result.expression;
-  if (!expr || typeof expr !== "object") {
+  // Prefer the side-channel (set whenever FINAL/FINAL_VAR was called at
+  // all) over the code's completion value — a model writing "FINAL(x);"
+  // as a bare statement inside a braced async arrow body never makes that
+  // the completion value, so relying on `expression` alone misses it.
+  const sentinel = result.finalCall ?? result.expression;
+  if (!sentinel || typeof sentinel !== "object") {
     return null;
   }
-  const e = expr as { __final?: unknown; __finalVar?: unknown };
+  const e = sentinel as { __final?: unknown; __finalVar?: unknown };
   if (typeof e.__final === "string") {
     return { kind: "final", answer: e.__final };
   }

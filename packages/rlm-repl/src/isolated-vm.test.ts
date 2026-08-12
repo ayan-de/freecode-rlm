@@ -32,6 +32,15 @@ describe("IsolatedVmREPL.execute", () => {
     expect(r.error?.message).toBe("boom");
   });
 
+  it("hints at wrapping in an async IIFE when code uses bare top-level await", async () => {
+    repl = new IsolatedVmREPL();
+    const r = await repl.execute("await Promise.resolve(1)");
+    expect(r.success).toBe(false);
+    expect(r.error?.name).toBe("SyntaxError");
+    expect(r.error?.message).toContain("await is only valid");
+    expect(r.error?.message).toContain("async IIFE");
+  });
+
   it("isolates from host: process is undefined in sandbox", async () => {
     repl = new IsolatedVmREPL();
     const r = await repl.execute("typeof process");

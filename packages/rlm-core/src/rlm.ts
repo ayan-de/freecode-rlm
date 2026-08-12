@@ -33,6 +33,13 @@ export class RLM {
   private readonly enableSystemTools: boolean;
   private userPrompt = "";
   private maxDepthSeen = 0;
+  // Tracks every callLlm/callRlm/callBash invocation spawned during the
+  // current completion() call so we can await them all before returning —
+  // otherwise a per-iteration REPL timeout can abort while e.g. a
+  // Promise.all of rlm_query() calls is still running on the host, and the
+  // caller may dispose this.repl while that orphaned work is still trying
+  // to touch it, crashing with "Isolate is disposed" outside any catch.
+  private pendingSubCalls: Promise<unknown>[] = [];
 
   constructor(
     opts: RLMOptions,
@@ -166,6 +173,13 @@ export class RLM {
       }
     }
 
+    // Wait out any sub-calls still running in the background (e.g. from a
+    // Promise.all whose enclosing execute() call already timed out) before
+    // returning, so callers never dispose this.repl while descendants are
+    // still using it.
+    await Promise.allSettled(this.pendingSubCalls);
+    this.pendingSubCalls = [];
+
     return {
       response:
         finalAnswer ??
@@ -194,7 +208,15 @@ export class RLM {
     };
   }
 
-  private async callBash(
+  private callBash(
+    command: string,
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const p = this.callBashImpl(command);
+    this.pendingSubCalls.push(p);
+    return p;
+  }
+
+  private async callBashImpl(
     command: string,
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     try {
@@ -213,7 +235,16 @@ export class RLM {
     }
   }
 
-  private async callLlm(prompt: string): Promise<string> {
+  // callLlm/callRlm are called from the sandbox via the bridge. They're
+  // tracked in pendingSubCalls (see completion()'s final await) so a
+  // per-iteration REPL timeout can't orphan them.
+  private callLlm(prompt: string): Promise<string> {
+    const p = this.callLlmImpl(prompt);
+    this.pendingSubCalls.push(p);
+    return p;
+  }
+
+  private async callLlmImpl(prompt: string): Promise<string> {
     // Budget check first; throws BudgetExceededError which propagates as a
     // rejection inside the sandbox IIFE.
     this.budget.tryConsumeSubCall();
@@ -221,7 +252,13 @@ export class RLM {
     return reply.content;
   }
 
-  private async callRlm(prompt: string): Promise<string> {
+  private callRlm(prompt: string): Promise<string> {
+    const p = this.callRlmImpl(prompt);
+    this.pendingSubCalls.push(p);
+    return p;
+  }
+
+  private async callRlmImpl(prompt: string): Promise<string> {
     // Depth check first: at maxDepth, rlm_query silently degrades to llm_query.
     if (this.currentDepth + 1 >= this.maxDepth) {
       if (this.verbose) {
@@ -229,7 +266,7 @@ export class RLM {
           `[rlm d=${this.currentDepth}] rlm_query depth-limited, degrading to llm_query`,
         );
       }
-      return this.callLlm(prompt);
+      return this.callLlmImpl(prompt);
     }
     this.budget.tryConsumeSubCall();
     if (this.currentDepth + 1 > this.maxDepthSeen) {

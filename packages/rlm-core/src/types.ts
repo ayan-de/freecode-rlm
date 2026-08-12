@@ -4,6 +4,9 @@ export interface CoreREPLResult {
   success: boolean;
   stdout: string[];
   expression?: unknown;
+  // Set when FINAL()/FINAL_VAR() was called during execution, independent
+  // of whether the code's completion value was that call's return value.
+  finalCall?: unknown;
   error?: { name: string; message: string; trace: string };
   durationMs: number;
 }

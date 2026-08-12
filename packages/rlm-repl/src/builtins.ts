@@ -14,8 +14,22 @@ const BUILTINS_SETUP = `
   globalThis.PRINT = (...args) => {
     console.log(...args);
   };
-  globalThis.FINAL = (answer) => ({ __final: String(answer) });
-  globalThis.FINAL_VAR = (name) => ({ __finalVar: String(name) });
+  // FINAL/FINAL_VAR record their call on a side-channel (__finalCall) in
+  // addition to returning a sentinel. Models very often write "FINAL(x);"
+  // as a bare statement inside a braced async arrow body (which does NOT
+  // implicitly return its last expression's value), so relying solely on
+  // "was FINAL's return value the code's completion value" silently misses
+  // the call. The side-channel makes detection robust to that.
+  globalThis.FINAL = (answer) => {
+    const sentinel = { __final: String(answer) };
+    globalThis.__finalCall = sentinel;
+    return sentinel;
+  };
+  globalThis.FINAL_VAR = (name) => {
+    const sentinel = { __finalVar: String(name) };
+    globalThis.__finalCall = sentinel;
+    return sentinel;
+  };
 `;
 
 /**

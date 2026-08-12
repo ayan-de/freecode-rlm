@@ -58,6 +58,20 @@ describe("extractFinal", () => {
     );
     expect(inspect).not.toHaveBeenCalled();
   });
+
+  it("prefers finalCall over expression (bare FINAL() statement not returned)", async () => {
+    const out = await extractFinal(
+      {
+        success: true,
+        stdout: [],
+        expression: undefined, // async arrow body never returned FINAL's value
+        finalCall: { __final: "hello" },
+        durationMs: 1,
+      },
+      async () => ({}),
+    );
+    expect(out).toEqual({ kind: "final", answer: "hello" });
+  });
 });
 
 describe("extractFinalFromText", () => {

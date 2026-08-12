@@ -13,6 +13,11 @@ describe("BUILTIN_SYSTEM_PROMPT", () => {
   it("warns against reading context directly", () => {
     expect(BUILTIN_SYSTEM_PROMPT.toLowerCase()).toContain("do not read");
   });
+
+  it("warns against bare top-level await and shows the async IIFE pattern", () => {
+    expect(BUILTIN_SYSTEM_PROMPT.toLowerCase()).toContain("top-level");
+    expect(BUILTIN_SYSTEM_PROMPT).toMatch(/async \(\) => \{/);
+  });
 });
 
 describe("buildSystemPrompt", () => {

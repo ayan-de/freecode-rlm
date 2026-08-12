@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { RLM } from "./rlm.js";
 import { MockLMClient } from "@freecode-rs/client";
+import type { ChatMessage, LMClient, ChatEvent } from "@freecode-rs/client";
 import { IsolatedVmREPL } from "@freecode-rs/repl";
 import type { CoreREPL, CoreREPLResult } from "./types.js";
 
@@ -276,5 +277,64 @@ describe("RLM (bridge, recursion, budget)", () => {
     const result = await rlm.completion("top");
     expect(result.response).toBe("hi");
     await repl.dispose();
+  });
+
+  it("waits out sub-calls orphaned by a REPL execute() timeout before returning, without an unhandled rejection", async () => {
+    // Regression test for "Isolate is disposed": a Promise.all of several
+    // concurrent llm_query() calls (the real-world pattern that triggered
+    // it) must not be allowed to keep running in the background once
+    // execute() times out and completion() returns — otherwise the caller
+    // can dispose the REPL while they're still trying to use it.
+    let unhandled: unknown;
+    const onUnhandled = (err: unknown) => {
+      unhandled = err;
+    };
+    process.on("unhandledRejection", onUnhandled);
+
+    // First chat() (the root's own turn) resolves immediately with code
+    // that fires 3 concurrent llm_query calls; every subsequent chat()
+    // (one per sub-call) is deliberately slower than execute()'s timeout.
+    let callCount = 0;
+    const slowClient: LMClient = {
+      async chat(_messages: ChatMessage[]): Promise<ChatMessage> {
+        callCount++;
+        if (callCount === 1) {
+          return {
+            role: "assistant",
+            content:
+              "```repl\n(async () => { await Promise.all([llm_query('a'), llm_query('b'), llm_query('c')]); })()\n```",
+          };
+        }
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        return { role: "assistant", content: "slow reply" };
+      },
+      async *stream(messages: ChatMessage[]): AsyncIterable<ChatEvent> {
+        const final = await this.chat(messages);
+        yield { kind: "final", message: final };
+      },
+    };
+
+    // execute()'s timeout (50ms) fires well before the slow sub-calls
+    // (300ms) resolve, and maxIterations: 1 means the outer loop gives up
+    // after that single timed-out iteration instead of retrying.
+    const repl = new IsolatedVmREPL({ timeoutMs: 50 });
+    const rlm = new RLM({ client: slowClient, repl, maxIterations: 1 });
+
+    const startedAt = Date.now();
+    const result = await rlm.completion("top");
+    const elapsedMs = Date.now() - startedAt;
+
+    // completion() must have actually waited for the orphaned sub-calls
+    // (which take ~300ms) rather than returning as soon as the 50ms
+    // execute() timeout fired.
+    expect(elapsedMs).toBeGreaterThanOrEqual(250);
+    expect(result.metadata.finishedReason).not.toBe("final");
+
+    // Disposing right after completion() returns must not crash — the
+    // orphaned sub-calls have already fully settled by this point.
+    await expect(repl.dispose()).resolves.toBeUndefined();
+
+    process.off("unhandledRejection", onUnhandled);
+    expect(unhandled).toBeUndefined();
   });
 });

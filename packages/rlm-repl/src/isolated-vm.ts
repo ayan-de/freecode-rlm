@@ -56,11 +56,18 @@ export class IsolatedVmREPL implements REPL {
       "  __stdout.push = (...args) => { __capturedStdout.push(args.map(a =>" +
       "    typeof a === 'string' ? a : JSON.stringify(a)" +
       "  ).join(' ')); return __origPush(...args); };" +
+      // Reset the side-channel before running so a call from a PRIOR
+      // execute() doesn't leak forward as a false-positive FINAL here.
+      "  globalThis.__finalCall = undefined;" +
       "  try {" +
       "    const __result = eval(__USER_CODE__);" +
-      "    return { success: true, value: await __result, captured: __capturedStdout };" +
+      "    return { success: true, value: await __result, captured: __capturedStdout, finalCall: globalThis.__finalCall };" +
       "  } catch (e) {" +
-      "    return { success: false, error: { name: e.name, message: e.message, trace: e.stack || '' }, captured: __capturedStdout };" +
+      "    let __msg = e.message;" +
+      "    if (e instanceof SyntaxError && __msg.indexOf('await is only valid') !== -1) {" +
+      "      __msg += ' — wrap your code in an async IIFE: (async () => { ...your code... })()';" +
+      "    }" +
+      "    return { success: false, error: { name: e.name, message: __msg, trace: e.stack || '' }, captured: __capturedStdout, finalCall: globalThis.__finalCall };" +
       "  }" +
       "})()";
     const scriptSrc = wrapper.replace("__USER_CODE__", JSON.stringify(code));
@@ -71,14 +78,20 @@ export class IsolatedVmREPL implements REPL {
         promise: true,
         copy: true,
       })) as
-        | { success: true; value: unknown; captured: string[] }
-        | { success: false; error: { name: string; message: string; trace: string }; captured: string[] };
+        | { success: true; value: unknown; captured: string[]; finalCall?: unknown }
+        | {
+            success: false;
+            error: { name: string; message: string; trace: string };
+            captured: string[];
+            finalCall?: unknown;
+          };
       for (const line of ref.captured) this.stdout.push(line);
       if (ref.success) {
         return {
           success: true,
           stdout: [...ref.captured],
           expression: ref.value,
+          finalCall: ref.finalCall,
           durationMs: Date.now() - start,
         };
       }
@@ -86,6 +99,7 @@ export class IsolatedVmREPL implements REPL {
         success: false,
         stdout: [...ref.captured],
         error: ref.error,
+        finalCall: ref.finalCall,
         durationMs: Date.now() - start,
       };
     } catch (e: unknown) {

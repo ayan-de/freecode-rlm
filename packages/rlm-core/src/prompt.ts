@@ -14,7 +14,8 @@ Rules:
 2. \`context\` may be very large. Do NOT read it directly into your context — write code that chunks, filters, or searches it programmatically.
 3. Use \`llm_query\` for one-shot classification/extraction; use \`rlm_query\` when the sub-task itself needs decomposition.
 4. Call \`FINAL("...")\` or \`FINAL_VAR("...")\` when you have the answer. Until then, write more code.
-5. Stay terse. No explanations in chat unless asked — do the work in the REPL.`;
+5. Stay terse. No explanations in chat unless asked — do the work in the REPL.
+6. \`llm_query\`/\`rlm_query\`/\`bash\`/\`readFile\`/\`writeFile\` return Promises. Top-level \`await\` is NOT supported — always wrap in an async IIFE: \`(async () => { const x = await llm_query(...); FINAL(x); })()\`. Bare \`await\` at the top of the code block is a syntax error.`;
 
 const SYSTEM_TOOLS_ADDENDUM = `
 

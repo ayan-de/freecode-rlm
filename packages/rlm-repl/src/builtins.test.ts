@@ -32,4 +32,25 @@ describe("installBuiltins", () => {
     expect(r.success).toBe(true);
     expect(r.expression).toEqual({ __finalVar: "answer" });
   });
+
+  it("records the call on __finalCall even when FINAL is a bare statement, not returned", async () => {
+    // A braced async arrow function body does NOT implicitly return its
+    // last expression's value, so `FINAL(x);` written as a plain statement
+    // (rather than `return FINAL(x);`) leaves the IIFE's completion value
+    // as undefined. finalCall is the side-channel that still catches it.
+    repl = new IsolatedVmREPL();
+    installBuiltins(repl);
+    const r = await repl.execute("(async () => { FINAL('not returned'); })()");
+    expect(r.success).toBe(true);
+    expect(r.expression).toBeUndefined();
+    expect(r.finalCall).toEqual({ __final: "not returned" });
+  });
+
+  it("resets __finalCall between execute() calls so a prior FINAL doesn't leak forward", async () => {
+    repl = new IsolatedVmREPL();
+    installBuiltins(repl);
+    await repl.execute("FINAL('first')");
+    const r = await repl.execute("1 + 1");
+    expect(r.finalCall).toBeUndefined();
+  });
 });
