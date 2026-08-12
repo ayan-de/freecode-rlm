@@ -22,18 +22,29 @@ const errIter: Iteration = {
 };
 
 describe("buildHistoryMessages", () => {
-  it("starts with system prompt, then user prompt, then one user message per iteration", () => {
+  it("starts with system prompt, then user prompt, then assistant+result per iteration", () => {
     const out = buildHistoryMessages({
       systemPrompt: "SYS",
       userPrompt: "find the answer",
       iterations: [okIter],
     });
-    expect(out).toHaveLength(3);
+    expect(out).toHaveLength(4);
     expect(out[0]).toEqual({ role: "system", content: "SYS" });
     expect(out[1]).toEqual({ role: "user", content: "find the answer" });
-    expect(out[2]?.role).toBe("user");
-    expect(out[2]?.content).toContain("hi");
-    expect(out[2]?.content).toContain("Result:");
+    expect(out[2]).toEqual({ role: "assistant", content: "hi" });
+    expect(out[3]?.role).toBe("user");
+    expect(out[3]?.content).toContain("[REPL result]");
+  });
+
+  it("keeps the model's own reply as role:assistant, not folded into role:user", () => {
+    const out = buildHistoryMessages({
+      systemPrompt: "S",
+      userPrompt: "U",
+      iterations: [okIter],
+    });
+    const assistantMsg = out[2];
+    expect(assistantMsg?.role).toBe("assistant");
+    expect(assistantMsg?.content).toBe("hi");
   });
 
   it("formats successful results with stdout and expression", () => {
@@ -42,7 +53,7 @@ describe("buildHistoryMessages", () => {
       userPrompt: "U",
       iterations: [okIter],
     });
-    const resultMsg = out[2];
+    const resultMsg = out[3];
     expect(resultMsg?.content).toContain("stdout:");
     expect(resultMsg?.content).toContain("a\nb");
     expect(resultMsg?.content).toContain("expression: 1");
@@ -54,7 +65,7 @@ describe("buildHistoryMessages", () => {
       userPrompt: "U",
       iterations: [errIter],
     });
-    const resultMsg = out[2];
+    const resultMsg = out[3];
     expect(resultMsg?.content).toContain("error: x is not defined");
     expect(resultMsg?.content).toContain("trace: at line 1");
   });
@@ -71,15 +82,35 @@ describe("buildHistoryMessages", () => {
     ]);
   });
 
-  it("emits one combined user message per iteration when there are multiple", () => {
+  it("emits one assistant+result pair per iteration when there are multiple", () => {
     const out = buildHistoryMessages({
       systemPrompt: "S",
       userPrompt: "U",
       iterations: [okIter, errIter],
     });
-    expect(out).toHaveLength(4);
+    expect(out).toHaveLength(6);
     expect(out[1]).toEqual({ role: "user", content: "U" });
-    expect(out[2]?.content).toContain("hi");
-    expect(out[3]?.content).toContain("error: x is not defined");
+    expect(out[2]).toEqual({ role: "assistant", content: "hi" });
+    expect(out[3]?.content).toContain("stdout:");
+    expect(out[4]).toEqual({ role: "assistant", content: "oh no" });
+    expect(out[5]?.content).toContain("error: x is not defined");
+  });
+
+  it("splices prior history between the system prompt and this turn's user prompt", () => {
+    const out = buildHistoryMessages({
+      systemPrompt: "S",
+      history: [
+        { role: "user", content: "turn one" },
+        { role: "assistant", content: "reply one" },
+      ],
+      userPrompt: "turn two",
+      iterations: [],
+    });
+    expect(out).toEqual([
+      { role: "system", content: "S" },
+      { role: "user", content: "turn one" },
+      { role: "assistant", content: "reply one" },
+      { role: "user", content: "turn two" },
+    ]);
   });
 });

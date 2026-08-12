@@ -137,15 +137,20 @@ describe("RLM (depth-0)", () => {
     const first = await rlm.completion("turn one");
     expect(first.messages).toEqual([
       { role: "user", content: "turn one" },
-      expect.objectContaining({ role: "user" }), // the iteration exchange
+      { role: "assistant", content: "```repl\nFINAL('first')\n```" },
+      expect.objectContaining({ role: "user" }), // the REPL result
     ]);
 
     await rlm.completion("turn two", { history: first.messages });
     const secondCallMessages = client.calls[1]!;
-    // system + prior history (2 msgs) + new user prompt
-    expect(secondCallMessages).toHaveLength(4);
+    // system + prior history (3 msgs) + new user prompt
+    expect(secondCallMessages).toHaveLength(5);
     expect(secondCallMessages[1]).toEqual({ role: "user", content: "turn one" });
-    expect(secondCallMessages[3]).toEqual({ role: "user", content: "turn two" });
+    expect(secondCallMessages[2]).toEqual({
+      role: "assistant",
+      content: "```repl\nFINAL('first')\n```",
+    });
+    expect(secondCallMessages[4]).toEqual({ role: "user", content: "turn two" });
   });
 
   it("loads the prompt as `context` in the REPL", async () => {
