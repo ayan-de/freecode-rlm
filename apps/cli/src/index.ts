@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { RLM, type RLMResult } from "@freecode-rs/core";
-import { VercelAIClient, type LMClient } from "@freecode-rs/client";
+import { VercelAIClient, type LMClient, type ChatMessage } from "@freecode-rs/client";
 import { IsolatedVmREPL } from "@freecode-rs/repl";
 import * as readline from "node:readline/promises";
 
@@ -57,15 +57,34 @@ async function runInteractive(
   opts: RunOptions,
 ): Promise<number> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  process.stdout.write(cyan("freecode-rlm") + dim(" — interactive mode (Ctrl+D to exit)\n"));
+  process.stdout.write(
+    cyan("freecode-rlm") +
+      dim(" — interactive mode (Ctrl+D to exit, /reset to clear conversation)\n"),
+  );
+
+  // One REPL + one running message history for the whole session, so state
+  // (files written, variables defined) and conversation memory both persist
+  // across turns instead of resetting on every line (see AGENTS.md history).
+  let repl = new IsolatedVmREPL({
+    timeoutMs: Number(opts.replTimeoutMs),
+    memoryMb: Number(opts.replMemoryMb),
+  });
+  let history: ChatMessage[] = [];
+
   try {
     for (;;) {
       const line = await rl.question(green("> "));
       if (!line.trim()) continue;
-      const repl = new IsolatedVmREPL({
-        timeoutMs: Number(opts.replTimeoutMs),
-        memoryMb: Number(opts.replMemoryMb),
-      });
+      if (line.trim() === "/reset") {
+        await repl.dispose();
+        repl = new IsolatedVmREPL({
+          timeoutMs: Number(opts.replTimeoutMs),
+          memoryMb: Number(opts.replMemoryMb),
+        });
+        history = [];
+        process.stdout.write(dim("conversation and REPL state cleared\n"));
+        continue;
+      }
       const rlm = new RLM({
         client,
         repl,
@@ -73,21 +92,22 @@ async function runInteractive(
         maxIterations: Number(opts.maxIterations),
         maxSubCalls: Number(opts.maxSubCalls),
         verbose: opts.verbose,
+        enableSystemTools: opts.enableSystemTools,
       });
       try {
-        const result = await rlm.completion(line);
+        const result = await rlm.completion(line, { history });
+        history = result.messages;
         if (opts.verbose) printTrace(result);
         process.stdout.write(yellow(result.response) + "\n");
       } catch (e) {
         process.stderr.write(`error: ${(e as Error).message}\n`);
-      } finally {
-        await repl.dispose();
       }
     }
   } catch {
     // rl.question rejects on Ctrl+D (stream close) — treat as clean exit.
   } finally {
     rl.close();
+    await repl.dispose();
   }
   process.stdout.write("\n");
   return 0;
@@ -107,6 +127,7 @@ export interface RunOptions {
   replTimeoutMs: number;
   replMemoryMb: number;
   verbose: boolean;
+  enableSystemTools: boolean;
 }
 
 export async function run(args: string[]): Promise<number> {
@@ -147,6 +168,15 @@ export async function run(args: string[]): Promise<number> {
     .option("--max-sub-calls <n>", "max sub-calls across the run", "100")
     .option("--repl-timeout-ms <n>", "REPL timeout per execute()", "30000")
     .option("--repl-memory-mb <n>", "isolated-vm memory limit", "256")
+    .option(
+      "--enable-system-tools",
+      "expose bash()/readFile()/writeFile() to the REPL (host shell + filesystem access)",
+      true,
+    )
+    .option(
+      "--no-enable-system-tools",
+      "disable bash()/readFile()/writeFile() access",
+    )
     .option("-v, --verbose", "verbose logging", false);
 
   let prompt: string | undefined;
@@ -215,6 +245,7 @@ export async function run(args: string[]): Promise<number> {
     maxIterations: Number(opts.maxIterations),
     maxSubCalls: Number(opts.maxSubCalls),
     verbose: opts.verbose,
+    enableSystemTools: opts.enableSystemTools,
   });
 
   try {
