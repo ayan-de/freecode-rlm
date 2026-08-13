@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@freecode-rs/client": "workspace:*",
-    "@freecode-rs/repl": "workspace:*"
+    "@freecode-rs/repl": "workspace:*",
+    "@freecode-rs/skill-websearch": "workspace:*"
   },
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",
