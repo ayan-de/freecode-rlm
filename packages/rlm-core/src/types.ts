@@ -1,4 +1,5 @@
 import type { ChatMessage, LMClient } from "@freecode-rs/client";
+import type { CompactionEvent, CompactionOptions } from "./compaction.js";
 
 export interface CoreREPLResult {
   success: boolean;
@@ -31,6 +32,12 @@ export interface RLMOptions {
   // shell and filesystem access on the host machine. Off by default since
   // it lets model-written code run arbitrary commands.
   enableSystemTools?: boolean;
+  // Context-window compaction. When the projected message list exceeds
+  // (contextWindow - reserveTokens), older iterations are summarized
+  // and replaced with a single summary iteration. See compaction.ts for
+  // the trigger math and the structured summarization prompt format.
+  // Pass `compaction: { enabled: false }` to opt out entirely.
+  compaction?: CompactionOptions & { enabled?: boolean };
 }
 
 export interface Iteration {
@@ -54,6 +61,10 @@ export interface RLMResult {
     totalSubCalls: number;
     depthReached: number;
     finishedReason: "final" | "max_iterations" | "error";
+    // One entry per compaction that fired during this completion() call.
+    // Empty if compaction was disabled or never triggered. See
+    // CompactionEvent in compaction.ts for field semantics.
+    compactionEvents: CompactionEvent[];
   };
 }
 

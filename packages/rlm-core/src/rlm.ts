@@ -18,6 +18,12 @@ import { extractReplCode } from "./utils/code-extract.js";
 import { buildHistoryMessages } from "./utils/messages.js";
 import { extractFinal, extractFinalFromText } from "./final.js";
 import { Budget, BudgetExceededError } from "./budget.js";
+import {
+  compactIterations,
+  DEFAULT_COMPACTION_OPTIONS,
+  shouldCompact,
+  type CompactionEvent,
+} from "./compaction.js";
 
 const execAsync = promisify(exec);
 
@@ -31,6 +37,12 @@ export class RLM {
   private readonly currentDepth: number;
   private readonly budget: Budget;
   private readonly enableSystemTools: boolean;
+  // Compaction is opt-in: caller passes `opts.compaction` to enable it.
+  // When undefined, no compaction runs and the trajectory can grow
+  // unbounded (which is fine for short completions).
+  private readonly compactionOpts:
+    | (NonNullable<RLMOptions["compaction"]> & { enabled: boolean })
+    | undefined;
   private userPrompt = "";
   private maxDepthSeen = 0;
   // Tracks every callLlm/callRlm/callBash invocation spawned during the
@@ -51,6 +63,14 @@ export class RLM {
     this.maxIterations = opts.maxIterations ?? 50;
     this.verbose = opts.verbose ?? false;
     this.enableSystemTools = opts.enableSystemTools ?? false;
+    // Compaction defaults to enabled when opts.compaction is passed at
+    // all — the caller opts out with `{ enabled: false }`. We don't
+    // apply defaults from DEFAULT_COMPACTION_OPTIONS here; that
+    // happens inside shouldCompact / compactIterations so the trigger
+    // math stays consistent with the rest of the module.
+    this.compactionOpts = opts.compaction
+      ? { enabled: opts.compaction.enabled ?? true, ...opts.compaction }
+      : undefined;
     this.systemPrompt =
       opts.systemPrompt ??
       buildSystemPrompt({ enableSystemTools: this.enableSystemTools });
@@ -96,6 +116,8 @@ export class RLM {
     const iterations: Iteration[] = [];
     let finalAnswer: string | null = null;
     let finishedReason: RLMResult["metadata"]["finishedReason"] = "max_iterations";
+    const compactionEvents: CompactionEvent[] = [];
+    let compactionCount = 0;
 
     for (let i = 0; i < this.maxIterations; i++) {
       try {
@@ -104,6 +126,28 @@ export class RLM {
         if (e instanceof BudgetExceededError) break;
         throw e;
       }
+
+      // Compaction check: runs between iterations, AFTER the previous
+      // iteration was pushed, so the just-finished exchange is included
+      // in the token count. Triggers a summarization call (counted as a
+      // sub-call against the shared budget) and replaces `iterations`
+      // with [summary, ...recent]. The next iteration then sees the
+      // compacted history through buildHistoryMessages.
+      if (this.compactionOpts?.enabled) {
+        const maxCompactions =
+          this.compactionOpts.maxCompactions ?? DEFAULT_COMPACTION_OPTIONS.maxCompactions;
+        if (compactionCount < maxCompactions) {
+          await this.maybeCompact({
+            iterations,
+            compactionEvents,
+            compactionCount,
+            onCounted: () => {
+              compactionCount++;
+            },
+          });
+        }
+      }
+
       const messages = buildHistoryMessages({
         systemPrompt: this.systemPrompt,
         history,
@@ -204,8 +248,128 @@ export class RLM {
         totalSubCalls: this.budget.subCalls,
         depthReached: this.maxDepthSeen,
         finishedReason,
+        compactionEvents,
       },
     };
+  }
+
+  /**
+   * Run the compaction trigger + summary call, mutating `iterations` in
+   * place and appending to `compactionEvents`. Splits out the trigger
+   * math (shouldCompact), the LM call (client.chat on the summary
+   * prompt), and the in-place array swap so each piece stays testable.
+   *
+   * The summary call counts as a sub-call against the shared Budget so
+   * a runaway trajectory doesn't burn through maxSubCalls on summaries.
+   */
+  private async maybeCompact(args: {
+    iterations: Iteration[];
+    compactionEvents: CompactionEvent[];
+    compactionCount: number;
+    onCounted: () => void;
+  }): Promise<void> {
+    const { iterations, compactionEvents, compactionCount, onCounted } = args;
+    if (!this.compactionOpts?.enabled) return;
+    const extraTokens = Math.ceil(
+      (this.systemPrompt.length + this.userPrompt.length) / 4,
+    );
+    if (!shouldCompact(iterations, this.compactionOpts, extraTokens)) return;
+
+    // Budget reservation: a summarization call is a sub-call from the
+    // root's perspective, so it counts against maxSubCalls. If we don't
+    // have headroom, skip the compaction rather than crashing the loop.
+    try {
+      this.budget.tryConsumeSubCall();
+    } catch (e) {
+      if (e instanceof BudgetExceededError) {
+        if (this.verbose) {
+          console.error(
+            `[rlm d=${this.currentDepth}] compaction skipped: sub-call budget exhausted`,
+          );
+        }
+        return;
+      }
+      throw e;
+    }
+
+    const summarizer: (prompt: string) => Promise<string> = async (prompt) => {
+      const reply = await this.client.chat([{ role: "user", content: prompt }]);
+      // Some providers wrap content in an array; normalize.
+      const content = reply.content;
+      return typeof content === "string" ? content : JSON.stringify(content);
+    };
+
+    let result;
+    try {
+      result = await compactIterations(
+        iterations,
+        this.compactionOpts,
+        summarizer,
+        { compactionCount: compactionCount + 1 },
+      );
+    } catch (e) {
+      // A failed summarization (network, refusal, whatever) must not
+      // take down the loop. Log and continue with the uncompacted
+      // history. Note: we DO NOT increment compactionCount here, so a
+      // failing summarizer can't burn through the maxCompactions
+      // budget and prevent future attempts.
+      if (this.verbose) {
+        console.error(`[rlm d=${this.currentDepth}] compaction failed:`, e);
+      }
+      return;
+    }
+
+    // Nothing to compact (everything fits in the keepRecent window).
+    // Don't count this against maxCompactions, don't emit an event,
+    // don't replace iterations — bail out silently. This is the
+    // common case when contextWindow was tuned high relative to the
+    // trajectory length.
+    if (result.iterationsReplaced === 0) {
+      if (this.verbose) {
+        console.error(
+          `[rlm d=${this.currentDepth}] compaction no-op (keepRecent satisfied)`,
+        );
+      }
+      return;
+    }
+
+    // Nothing to compact (everything fits in the keepRecent window).
+    // Don't count this against maxCompactions, don't emit an event,
+    // don't replace iterations — bail out silently. This is the
+    // common case when contextWindow was tuned high relative to the
+    // trajectory length.
+    if (result.iterationsReplaced === 0) {
+      if (this.verbose) {
+        console.error(
+          `[rlm d=${this.currentDepth}] compaction no-op (keepRecent satisfied)`,
+        );
+      }
+      return;
+    }
+
+    // Mutate iterations in place: clear and refill so existing
+    // references held by callers (none today, but future-proof) stay
+    // valid. Re-index so subsequent iterations line up with their
+    // array positions.
+    iterations.length = 0;
+    for (let k = 0; k < result.newIterations.length; k++) {
+      iterations.push({ ...result.newIterations[k]!, index: k });
+    }
+    onCounted();
+
+    compactionEvents.push({
+      atIteration: iterations.length - 1,
+      tokensBefore: result.tokensBefore,
+      tokensAfter: result.tokensAfter,
+      iterationsReplaced: result.iterationsReplaced,
+      compactionCount,
+    });
+
+    if (this.verbose) {
+      console.error(
+        `[rlm d=${this.currentDepth}] compacted: ${result.tokensBefore}→${result.tokensAfter} tokens, replaced ${result.iterationsReplaced} iterations (count=${compactionCount})`,
+      );
+    }
   }
 
   private callBash(
@@ -283,6 +447,9 @@ export class RLM {
         maxIterations: this.maxIterations,
         verbose: this.verbose,
         enableSystemTools: this.enableSystemTools,
+        // Inherit the parent's compaction policy so a long sub-RLM
+        // doesn't grow unbounded while the parent is waiting on it.
+        ...(this.compactionOpts ? { compaction: this.compactionOpts } : {}),
       },
       { currentDepth: this.currentDepth + 1, budget: this.budget },
     );
