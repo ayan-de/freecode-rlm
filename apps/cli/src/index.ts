@@ -2,8 +2,69 @@
 import { Command } from "commander";
 import { RLM, type RLMResult } from "@freecode-rs/core";
 import { VercelAIClient, type LMClient, type ChatMessage } from "@freecode-rs/client";
-import { IsolatedVmREPL } from "@freecode-rs/repl";
+import { IsolatedVmREPL, loadSkills, type Skill } from "@freecode-rs/repl";
 import * as readline from "node:readline/promises";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Resolve the skills directory by walking up from any installed skill
+// package. The skill package's `main` resolves to dist/index.js inside
+// the package directory; the directory `loadSkills()` scans is the
+// parent of all skill packages (e.g. `packages/`). Three `dirname`s
+// walks `dist/index.js` -> `dist` -> `<pkg>` -> `<parent>`. This makes
+// the CLI work wherever the workspace symlink puts the package — no
+// hardcoded paths. Non-skill packages (repl, client, core, etc.) are
+// filtered out by the `freecodeSkill: true` marker inside `loadSkills`.
+async function resolveSkillsDir(): Promise<string | undefined> {
+  try {
+    const pkgUrl = await import.meta.resolve("@freecode-rs/skill-websearch");
+    const pkgFile = fileURLToPath(pkgUrl);
+    // .../<parent>/rlm-skills/dist/index.js
+    //       ^pkgDir  ^skillsDir  ^pkgFile
+    return dirname(dirname(dirname(pkgFile)));
+  } catch {
+    return undefined;
+  }
+}
+
+// Heuristic warning: if a skill named "websearch" is loaded but the
+// matching API key env var is missing, print a heads-up so the user
+// understands why the skill runs but returns the "not configured" message.
+function missingEnvForSkill(skill: Skill): string | undefined {
+  if (skill.name === "websearch" && !process.env.SERPER_API_KEY?.trim()) {
+    return "SERPER_API_KEY not set — calls will return a setup message";
+  }
+  return undefined;
+}
+
+// Small renderer: one line per installed skill, with the description
+// abbreviated, plus any per-skill warnings. Returns true if anything
+// was rendered (caller can use this to decide whether to print a header).
+function renderSkillsPanel(skills: Skill[]): string {
+  const lines: string[] = [];
+  for (const s of skills) {
+    const desc = s.description.length > 80 ? s.description.slice(0, 77) + "…" : s.description;
+    lines.push(`  ${cyan("•")} ${s.name} ${dim(`— ${desc}`)}`);
+    const warn = missingEnvForSkill(s);
+    if (warn) lines.push(`      ${yellow(`! ${warn}`)}`);
+  }
+  return lines.join("\n");
+}
+
+async function loadCliSkills(): Promise<Skill[]> {
+  const dir = await resolveSkillsDir();
+  if (!dir) return [];
+  try {
+    return await loadSkills(dir);
+  } catch (e) {
+    // Don't crash the CLI over a broken skill — surface and proceed with
+    // no skills. The user can still run a normal RLM session.
+    process.stderr.write(
+      `warning: failed to load skills from ${dir}: ${(e as Error).message}\n`,
+    );
+    return [];
+  }
+}
 
 // Fallback API key source shared with the sibling `freecode` project's config.
 async function readFreecodeApiKey(): Promise<string | undefined> {
@@ -55,12 +116,17 @@ function truncate(s: string, n = 200): string {
 async function runInteractive(
   client: LMClient,
   opts: RunOptions,
+  skills: Skill[] = [],
 ): Promise<number> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   process.stdout.write(
     cyan("freecode-rlm") +
       dim(" — interactive mode (Ctrl+D to exit, /reset to clear conversation)\n"),
   );
+  if (skills.length > 0) {
+    process.stdout.write(dim("skills injected:\n"));
+    process.stdout.write(renderSkillsPanel(skills) + "\n");
+  }
 
   // One REPL + one running message history for the whole session, so state
   // (files written, variables defined) and conversation memory both persist
@@ -93,6 +159,7 @@ async function runInteractive(
         maxSubCalls: Number(opts.maxSubCalls),
         verbose: opts.verbose,
         enableSystemTools: opts.enableSystemTools,
+        skills,
       });
       try {
         const result = await rlm.completion(line, { history });
@@ -230,8 +297,18 @@ export async function run(args: string[]): Promise<number> {
     baseURL: opts.baseUrl,
   });
 
+  // Load any installed skills once per CLI invocation. Errors degrade to
+  // a warning (no skills) rather than crashing the session.
+  const skills = await loadCliSkills();
+  if (skills.length > 0 && prompt) {
+    // Single-shot mode: print the panel before running so the user sees
+    // what was injected. Interactive mode prints its own header below.
+    process.stdout.write(dim("skills injected:\n"));
+    process.stdout.write(renderSkillsPanel(skills) + "\n");
+  }
+
   if (!prompt) {
-    return runInteractive(client, opts);
+    return runInteractive(client, opts, skills);
   }
 
   const repl = new IsolatedVmREPL({
@@ -246,6 +323,7 @@ export async function run(args: string[]): Promise<number> {
     maxSubCalls: Number(opts.maxSubCalls),
     verbose: opts.verbose,
     enableSystemTools: opts.enableSystemTools,
+    skills,
   });
 
   try {

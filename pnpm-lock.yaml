@@ -29,6 +29,9 @@ importers:
       '@freecode-rs/repl':
         specifier: workspace:*
         version: link:../../packages/rlm-repl
+      '@freecode-rs/skill-websearch':
+        specifier: workspace:*
+        version: link:../../packages/rlm-skills
       commander:
         specifier: ^12.1.0
         version: 12.1.0
