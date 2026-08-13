@@ -1,4 +1,5 @@
 import type { ChatMessage, LMClient } from "@freecode-rs/client";
+import type { Skill } from "@freecode-rs/repl";
 import type { CompactionEvent, CompactionOptions } from "./compaction.js";
 
 export interface CoreREPLResult {
@@ -38,6 +39,12 @@ export interface RLMOptions {
   // the trigger math and the structured summarization prompt format.
   // Pass `compaction: { enabled: false }` to opt out entirely.
   compaction?: CompactionOptions & { enabled?: boolean };
+  /**
+   * Pre-loaded skills to expose as pre-imported globals in the REPL.
+   * Build via `loadSkills(path)` from `@freecode-rs/repl`. The core
+   * does not scan the filesystem itself — the caller owns that.
+   */
+  skills?: Skill[];
 }
 
 export interface Iteration {

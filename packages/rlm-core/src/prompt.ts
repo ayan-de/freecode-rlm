@@ -1,3 +1,5 @@
+import type { SkillMeta } from "@freecode-rs/repl";
+
 export const BUILTIN_SYSTEM_PROMPT = `You are an RLM (Recursive Language Model). You have access to a JavaScript REPL that you can write code in to inspect, transform, and answer a user's prompt.
 
 The user's prompt is available as the variable \`context\` in the REPL scope.
@@ -24,8 +26,18 @@ You also have host system access:
 - \`readFile(path: string): Promise<string>\` — read a file's contents.
 - \`writeFile(path: string, content: string): Promise<void>\` — write a file's contents.`;
 
-export function buildSystemPrompt(opts?: { enableSystemTools?: boolean }): string {
-  return opts?.enableSystemTools
+export function buildSystemPrompt(opts?: {
+  enableSystemTools?: boolean;
+  skills?: readonly SkillMeta[];
+}): string {
+  const base = opts?.enableSystemTools
     ? BUILTIN_SYSTEM_PROMPT + SYSTEM_TOOLS_ADDENDUM
     : BUILTIN_SYSTEM_PROMPT;
+  return base + buildSkillsSection(opts?.skills ?? []);
+}
+
+function buildSkillsSection(skills: readonly SkillMeta[]): string {
+  if (skills.length === 0) return "";
+  const lines = skills.map((s) => `- \`${s.name}(...args): Promise<string>\` — ${s.description}`);
+  return `\n\nInstalled skills (pre-imported in the REPL):\n${lines.join("\n")}\n\nCall skills via \`await <name>(...args)\` or \`await <name>.run(...args)\`.`;
 }
