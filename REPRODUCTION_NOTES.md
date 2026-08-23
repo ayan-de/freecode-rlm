@@ -39,10 +39,10 @@ Recorded here so nobody mistakes them for design choices. Details and fixes in
 
 | ID | Defect | Severity | Status |
 |---|---|---|---|
-| V-04 | `FINAL_VAR` cannot read a model-created variable; `inspect()` only returns host-injected bindings. | CRITICAL | open |
 | V-01 | stdout enters the root history untruncated, contrary to §2 fn. 2 and our own system prompt. | HIGH | open |
 | V-02 | The system prompt omits the context metadata the paper injects (`{context_type}`, `{context_total_length}`, `{context_lengths}`). | HIGH | open |
 | V-03 | REPL variables did not survive between iterations — `const`/`let`/`var` were scoped to a per-call `eval` wrapper, breaking the paper's chunk-and-accumulate strategy. | CRITICAL | **fixed 2026-08-23** |
+| V-04 | `FINAL_VAR` could not read a model-created variable — `inspect()` enumerated host-injected bindings only, and silently resolved to `"undefined"`. | CRITICAL | **fixed 2026-08-23** |
 
 ---
 

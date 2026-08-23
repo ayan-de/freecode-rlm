@@ -4,8 +4,8 @@ Audit of this repository against [PAPER_SPEC.md](PAPER_SPEC.md) and
 arXiv [2512.24601v3](https://arxiv.org/abs/2512.24601).
 
 **First audited:** 2026-08-23 at `b9bb0d4`
-**Last updated:** 2026-08-23 — V-03 fixed
-**Suite:** 142 tests, 139 pass / 3 skipped (live-API tests).
+**Last updated:** 2026-08-23 — V-03 and V-04 fixed
+**Suite:** 151 tests, 148 pass / 3 skipped (live-API tests).
 
 Status meanings:
 
@@ -17,9 +17,10 @@ Status meanings:
 | `DEVIATION` | Differs from the paper on purpose. Recorded in [REPRODUCTION_NOTES.md](REPRODUCTION_NOTES.md). |
 | `UNVERIFIED` | Not checked — usually because no eval harness exists yet. |
 
-**A green test suite does not mean fidelity.** Three of the four `FAIL`s below
-sit under a fully passing suite, because the tests assert our implementation's
-behaviour rather than the paper's requirements.
+**A green test suite does not mean fidelity.** Every `FAIL` recorded here was
+found under a fully passing suite, because the tests asserted our
+implementation's behaviour rather than the paper's requirements. Both
+CRITICALs (V-03, V-04) were caught this way and are now fixed.
 
 ---
 
@@ -27,57 +28,16 @@ behaviour rather than the paper's requirements.
 
 | Severity | Count | IDs |
 |---|---|---|
-| CRITICAL | 1 | V-04 |
+| CRITICAL | 0 | — |
 | HIGH | 2 | V-01, V-02 |
 | MEDIUM | 3 | V-05, V-06, V-09 |
 | Reproduction gaps | 5 | V-10 … V-14 |
-| Passing | 11 | V-03, V-15 … V-24 |
-| Fixed since first audit | 1 | V-03 |
+| Passing | 12 | V-03, V-04, V-15 … V-24 |
+| Fixed since first audit | 2 | V-03, V-04 |
 
 ---
 
 ## Failures
-
-### V-04 — CRITICAL — `FINAL_VAR` cannot resolve a model-created variable
-
-| | |
-|---|---|
-| **Requirement** | The final answer may be the value of a variable the model created in the REPL. |
-| **Paper reference** | §2 ("Once the RLM sets the variable `Final` inside the REPL … the value in `Final` is returned"); App. C.1 (1a) option 2, `FINAL_VAR(variable_name)` |
-| **Code location** | `packages/rlm-repl/src/isolated-vm.ts:125-129`; consumed by `packages/rlm-core/src/final.ts` |
-| **Status** | **FAIL** |
-
-`IsolatedVmREPL.inspect()` iterates `this.bindings` — a **host-side `Map`
-populated only by `load()`**. It never reads sandbox globals. So `FINAL_VAR`
-can only resolve variables the *host* injected, never ones the *model* created,
-which is the entire point of the feature.
-
-**Verified failure:**
-
-```
-execute("const answer = 42;") ; inspect()  → {}
-```
-
-**Impact.** `FINAL_VAR` is one of only two ways the paper lets a model return an
-answer, and it is the one required for answers longer than the model's output
-window (§2: "unbounded output tokens"). Currently it silently resolves to the
-string `"undefined"` (`final.test.ts:45` documents exactly that behaviour as if
-it were correct).
-
-**Why no test caught it.** `rlm.test.ts:188` "resolves FINAL_VAR by reading a
-custom-defined variable" uses `FakeREPL`, not `IsolatedVmREPL`. The fake
-persists variables; the real implementation does not.
-
-**Minimal fix.** Resolve **by name**, not by enumeration. V-03 is fixed, so
-declarations now survive — but `const`/`let` at top level land in the global
-*lexical* environment, which is not a property bag: `Object.keys(globalThis)`
-will not list them. A lookup script (`typeof <name> !== 'undefined' ? <name> :
-undefined`, run as global code) reaches both lexical bindings and
-`globalThis` properties. `FINAL_VAR(name)` already has the name, so this is
-the natural shape; `inspect()`'s enumerate-everything contract should narrow
-to a `lookup(name)` the core actually needs.
-
----
 
 ### V-01 — HIGH — stdout is not truncated before entering history
 
@@ -200,6 +160,7 @@ Until at least one of these produces a number, the README must report
 | ID | Requirement | Paper ref | Code | Test | Status |
 |---|---|---|---|---|---|
 | V-03 | REPL state persists across iterations; the model accumulates values into variables over turns | §2 ("**persistent** REPL"; "build up intermediate values … into new variables"); Alg. 1 `(state, stdout) ← REPL(state, code)`; App. C.1 (1a) buffer strategy | `isolated-vm.ts` `execute()` | `isolated-vm.test.ts` — "IsolatedVmREPL state persistence across execute() calls" (8 tests) | `PASS` — **fixed 2026-08-23**, see below |
+| V-04 | The response may be the value of a variable the model built in the REPL (`FINAL_VAR`) | §2 ("Once the RLM sets the variable `Final` inside the REPL … the value in `Final` is returned"); App. C.1 (1a) option 2 | `isolated-vm.ts` `lookup()`, `final.ts` | `isolated-vm.test.ts` — "IsolatedVmREPL.lookup" (7 tests); `rlm.test.ts` — "resolves FINAL_VAR against a variable the model built in the real sandbox" | `PASS` — **fixed 2026-08-23**, see below |
 | V-15 | Prompt `P` is loaded as a REPL variable, never as a message | §2, Alg. 1 `InitREPL(prompt=P)` | `rlm.ts:103` | `rlm.test.ts:157` "loads the prompt as `context` in the REPL" | `PASS` |
 | V-16 | `llm_query` callable from inside the REPL | App. C.1 (1a) item 2 | `bridge.ts` | `bridge.test.ts:10`; `rlm.test.ts:212` | `PASS` |
 | V-17 | `rlm_query` spawns a nested RLM with its own REPL | §2; App. C.1 (1c) | `rlm.ts:427-460` | `rlm.test.ts:227` "sub-RLM is invoked when rlm_query is called" | `PASS` |
@@ -216,7 +177,7 @@ Until at least one of these produces a number, the README must report
 ## Fix order
 
 1. ~~**V-03** — restore variable persistence.~~ **Done 2026-08-23.**
-2. **V-04** — resolve `FINAL_VAR` by name against sandbox scope. Unblocked by V-03.
+2. ~~**V-04** — resolve `FINAL_VAR` by name against sandbox scope.~~ **Done 2026-08-23.**
 3. **V-01** — truncate at 20,000 chars/block.
 4. **V-02** — inject context metadata into the system prompt.
 5. Re-audit, then build the eval harness (V-10 … V-14) and attempt OOLONG
@@ -268,3 +229,42 @@ revisiting if trajectories show models tripping on it often.
 **Also fixed incidentally.** The old outer `catch` returned the *cumulative*
 `this.stdout` rather than the current call's output. Per-call stdout is now
 consistent on every path.
+
+### V-04 — fixed 2026-08-23
+
+**Root cause.** `IsolatedVmREPL.inspect()` iterated a host-side `Map`
+populated only by `load()`. It never read sandbox scope, so `FINAL_VAR` could
+resolve only variables the *host* injected — never one the *model* created,
+which is the entire point of the feature. It failed silently, resolving to the
+string `"undefined"`.
+
+Measured before the fix:
+
+```
+execute("const answer = 42;") ; inspect()  → {}
+```
+
+**Fix.** Replaced `inspect(): Promise<Record<string, unknown>>` with
+`lookup(name): Promise<unknown>` across the `REPL` and `CoreREPL` interfaces.
+Enumeration cannot work here: now that V-03 is fixed, top-level `const`/`let`
+are global *lexical* bindings, which are not properties of `globalThis` and
+cannot be listed. `lookup()` instead evaluates the identifier as global code
+(`typeof <name> === "undefined" ? undefined : <name>`), which reaches lexical
+bindings and `globalThis` properties alike. `FINAL_VAR(name)` already carries
+the name, so the narrower contract is also the one the core actually needs.
+
+`name` arrives from model-written `FINAL_VAR(...)`, so it is checked against a
+bare-identifier pattern before it is interpolated into sandbox source. The
+sandbox already runs model code, so this is robustness rather than a trust
+boundary — a malformed name reads as "no such variable". `promise: true` on
+the lookup means a variable holding a pending Promise resolves to its value.
+
+**Why no test caught it.** `rlm.test.ts` tested `FINAL_VAR` against `FakeREPL`,
+which persisted variables, while the real sandbox did not. The new regression
+test runs against `IsolatedVmREPL` and builds the variable across two turns,
+the way Appendix C.1 describes.
+
+**Incidental simplification.** `FakeREPL` carried ~25 lines of globals-harvesting
+that existed only to satisfy `inspect()`'s enumerate-everything contract. With
+`lookup()` it is a two-line method, and `IsolatedVmREPL` no longer needs its
+`bindings` Map at all.

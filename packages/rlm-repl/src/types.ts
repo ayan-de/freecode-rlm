@@ -14,7 +14,15 @@ export interface REPL {
   load(name: string, value: unknown): Promise<void>;
   execute(code: string, opts?: { timeoutMs?: number }): Promise<REPLResult>;
   readStdout(): string[];
-  inspect(): Promise<Record<string, unknown>>;
+  /**
+   * Read one variable out of REPL scope by name, or `undefined` if no such
+   * variable exists. This is what backs `FINAL_VAR(name)`.
+   *
+   * Lookup is by name rather than by enumeration because top-level
+   * `const`/`let` in the model's code become global *lexical* bindings,
+   * which are not properties of `globalThis` and cannot be listed.
+   */
+  lookup(name: string): Promise<unknown>;
   dispose(): Promise<void>;
 }
 

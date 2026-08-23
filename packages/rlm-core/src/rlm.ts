@@ -195,8 +195,8 @@ export class RLM {
           replResult: { success: true, stdout: [], durationMs: 0 },
           subCallsAtStart: this.budget.subCalls,
         });
-        const textFinal = await extractFinalFromText(assistantMessage.content, () =>
-          this.repl.inspect(),
+        const textFinal = await extractFinalFromText(assistantMessage.content, (n) =>
+          this.repl.lookup(n),
         );
         finalAnswer = textFinal ? textFinal.answer : assistantMessage.content;
         finishedReason = "final";
@@ -217,7 +217,7 @@ export class RLM {
         );
       }
 
-      const final = await extractFinal(replResult, () => this.repl.inspect());
+      const final = await extractFinal(replResult, (n) => this.repl.lookup(n));
       if (final) {
         finalAnswer = final.answer;
         finishedReason = "final";

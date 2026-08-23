@@ -63,13 +63,12 @@ describe("IsolatedVmREPL.execute", () => {
     expect(r.expression).toBe(84);
   });
 
-  it("inspect() returns currently bound variables", async () => {
+  it("lookup() reads a value put in scope by load()", async () => {
     repl = new IsolatedVmREPL();
     await repl.load("a", 1);
     await repl.load("b", "hi");
-    const vars = await repl.inspect();
-    expect(vars.a).toBe(1);
-    expect(vars.b).toBe("hi");
+    expect(await repl.lookup("a")).toBe(1);
+    expect(await repl.lookup("b")).toBe("hi");
   });
 
   it("readStdout() reflects cumulative console output across execute() calls", async () => {
@@ -191,5 +190,61 @@ describe("IsolatedVmREPL state persistence across execute() calls", () => {
     expect(r.error?.name).toBe("SyntaxError");
     expect(r.error?.message).toContain("already been declared");
     expect(r.error?.message).toContain("earlier turn");
+  });
+});
+
+// Paper §2: the response may be the value of a variable the model built up in
+// the REPL, which is how an RLM returns answers longer than the base model's
+// output window. FINAL_VAR(name) needs to read that variable back out.
+// See VERIFICATION.md V-04.
+describe("IsolatedVmREPL.lookup", () => {
+  let repl: IsolatedVmREPL;
+  afterEach(async () => {
+    await repl?.dispose();
+  });
+
+  it("resolves a `const` declared by executed code", async () => {
+    repl = new IsolatedVmREPL();
+    await repl.execute("const answer = 42;");
+    expect(await repl.lookup("answer")).toBe(42);
+  });
+
+  it("resolves a `let` declared by executed code", async () => {
+    repl = new IsolatedVmREPL();
+    await repl.execute("let note = 'drafted';");
+    expect(await repl.lookup("note")).toBe("drafted");
+  });
+
+  it("resolves a `var` declared by executed code", async () => {
+    repl = new IsolatedVmREPL();
+    await repl.execute("var count = 3;");
+    expect(await repl.lookup("count")).toBe(3);
+  });
+
+  it("resolves a composite value built across several calls", async () => {
+    repl = new IsolatedVmREPL();
+    await repl.execute("const buffers = [];");
+    await repl.execute("buffers.push('a'); buffers.push('b');");
+    expect(await repl.lookup("buffers")).toEqual(["a", "b"]);
+  });
+
+  it("returns undefined for a name that was never defined", async () => {
+    repl = new IsolatedVmREPL();
+    expect(await repl.lookup("nope")).toBeUndefined();
+  });
+
+  it("returns undefined for a name that is not a plain identifier", async () => {
+    repl = new IsolatedVmREPL();
+    await repl.execute("const flag = 'untouched';");
+    // The name reaches us from model-written FINAL_VAR(...), so it must never
+    // be interpolated into sandbox source unchecked.
+    expect(await repl.lookup("flag; flag = 'clobbered'")).toBeUndefined();
+    expect(await repl.lookup("flag")).toBe("untouched");
+  });
+
+  it("resolves a Promise-valued variable to its settled value", async () => {
+    repl = new IsolatedVmREPL();
+    await repl.execute("const later = Promise.resolve('eventually');");
+    expect(await repl.lookup("later")).toBe("eventually");
   });
 });

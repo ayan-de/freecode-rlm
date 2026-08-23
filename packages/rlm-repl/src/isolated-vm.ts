@@ -16,6 +16,9 @@ const console = {
 };
 `;
 
+/** A bare JS identifier — the only shape `lookup()` will evaluate. */
+const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
 /**
  * Attach a recovery hint to the two errors the sandbox's execution model
  * makes easy to hit but hard to read. Both are artefacts of running the
@@ -45,7 +48,6 @@ export class IsolatedVmREPL implements REPL {
   private timeoutMs: number;
   private memoryMb: number;
   private stdout: string[] = [];
-  private bindings = new Map<string, unknown>();
 
   constructor(opts: REPLOptions = {}) {
     this.timeoutMs = opts.timeoutMs ?? 30_000;
@@ -57,7 +59,6 @@ export class IsolatedVmREPL implements REPL {
   }
 
   async load(name: string, value: unknown): Promise<void> {
-    this.bindings.set(name, value);
     // JSON path — functions/undefineds are dropped. Push onto globalThis so
     // user code can reference the name directly (e.g. load('x', 42); execute('x*2')).
     const json = JSON.stringify(value, (_k, v) => (typeof v === "function" ? undefined : v));
@@ -168,10 +169,33 @@ export class IsolatedVmREPL implements REPL {
     return [...this.stdout];
   }
 
-  async inspect(): Promise<Record<string, unknown>> {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of this.bindings) out[k] = v;
-    return out;
+  async lookup(name: string): Promise<unknown> {
+    // Resolve by evaluating the identifier as global code rather than by
+    // enumerating globalThis: top-level `const`/`let` written by the model
+    // become global *lexical* bindings, which are not properties of the
+    // global object and so cannot be listed (VERIFICATION.md V-04).
+    //
+    // `name` arrives from a model-written FINAL_VAR(...) call, so it is
+    // never interpolated into source unchecked. The sandbox already runs
+    // model code, so this is a robustness guard rather than a trust
+    // boundary — a malformed name should read as "no such variable".
+    if (!IDENTIFIER.test(name)) return undefined;
+    try {
+      const script = this.isolate.compileScriptSync(
+        `(typeof ${name} === "undefined" ? undefined : ${name})`,
+      );
+      // promise: true so a variable holding a pending Promise resolves to
+      // its value rather than coming back as an uncopyable object.
+      return await script.run(this.context, {
+        timeout: 1000,
+        promise: true,
+        copy: true,
+      });
+    } catch {
+      // Unreadable (uncopyable value, torn-down isolate) reads as absent —
+      // extractFinal stringifies undefined to "undefined".
+      return undefined;
+    }
   }
 
   async dispose(): Promise<void> {

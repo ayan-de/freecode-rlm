@@ -17,7 +17,8 @@ export interface CoreREPL {
   load(name: string, value: unknown): Promise<void>;
   execute(code: string, opts?: { timeoutMs?: number }): Promise<CoreREPLResult>;
   readStdout(): string[];
-  inspect(): Promise<Record<string, unknown>>;
+  /** Read one variable out of REPL scope by name. Backs `FINAL_VAR(name)`. */
+  lookup(name: string): Promise<unknown>;
   dispose(): Promise<void>;
 }
 

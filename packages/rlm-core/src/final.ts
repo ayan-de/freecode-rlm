@@ -6,7 +6,7 @@ export type ExtractedFinal =
 
 export async function extractFinal(
   result: CoreREPLResult,
-  inspect: () => Promise<Record<string, unknown>>,
+  lookup: (name: string) => Promise<unknown>,
 ): Promise<ExtractedFinal> {
   // Prefer the side-channel (set whenever FINAL/FINAL_VAR was called at
   // all) over the code's completion value — a model writing "FINAL(x);"
@@ -21,9 +21,7 @@ export async function extractFinal(
     return { kind: "final", answer: e.__final };
   }
   if (typeof e.__finalVar === "string") {
-    const scope = await inspect();
-    const v = scope[e.__finalVar];
-    return { kind: "final", answer: stringify(v) };
+    return { kind: "final", answer: stringify(await lookup(e.__finalVar)) };
   }
   return null;
 }
@@ -32,13 +30,12 @@ export async function extractFinal(
 // instead of calling them as REPL functions (matches reference find_final_answer).
 export async function extractFinalFromText(
   text: string,
-  inspect: () => Promise<Record<string, unknown>>,
+  lookup: (name: string) => Promise<unknown>,
 ): Promise<ExtractedFinal> {
   const varMatch = /^\s*FINAL_VAR\((.*?)\)/ms.exec(text);
   if (varMatch?.[1] !== undefined) {
     const name = varMatch[1].trim().replace(/^['"]|['"]$/g, "");
-    const scope = await inspect();
-    return { kind: "final", answer: stringify(scope[name]) };
+    return { kind: "final", answer: stringify(await lookup(name)) };
   }
   const finalMatch = /^\s*FINAL\((.*?)\)/ms.exec(text);
   if (finalMatch?.[1] !== undefined) {
