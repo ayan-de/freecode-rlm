@@ -37,12 +37,12 @@ results are unmeasured.
 Recorded here so nobody mistakes them for design choices. Details and fixes in
 [VERIFICATION.md](VERIFICATION.md).
 
-| ID | Defect | Severity |
-|---|---|---|
-| V-03 | REPL variables do not survive between iterations — `const`/`let`/`var` are scoped to a per-call wrapper. Breaks the paper's chunk-and-accumulate strategy. | CRITICAL |
-| V-04 | `FINAL_VAR` cannot read a model-created variable; `inspect()` only returns host-injected bindings. | CRITICAL |
-| V-01 | stdout enters the root history untruncated, contrary to §2 fn. 2 and our own system prompt. | HIGH |
-| V-02 | The system prompt omits the context metadata the paper injects (`{context_type}`, `{context_total_length}`, `{context_lengths}`). | HIGH |
+| ID | Defect | Severity | Status |
+|---|---|---|---|
+| V-04 | `FINAL_VAR` cannot read a model-created variable; `inspect()` only returns host-injected bindings. | CRITICAL | open |
+| V-01 | stdout enters the root history untruncated, contrary to §2 fn. 2 and our own system prompt. | HIGH | open |
+| V-02 | The system prompt omits the context metadata the paper injects (`{context_type}`, `{context_total_length}`, `{context_lengths}`). | HIGH | open |
+| V-03 | REPL variables did not survive between iterations — `const`/`let`/`var` were scoped to a per-call `eval` wrapper, breaking the paper's chunk-and-accumulate strategy. | CRITICAL | **fixed 2026-08-23** |
 
 ---
 
@@ -68,10 +68,17 @@ Figure 4(b) reports syntax-error rates per trajectory. A JS-vs-Python difference
 in model coding fluency is a confound in any comparison against Table 1, and it
 must be stated whenever we report a number.
 
-**Additional JS-specific friction:** no top-level `await`, so sub-calls must be
-wrapped in an async IIFE. We handle this with a system-prompt rule and a
-targeted error hint (`isolated-vm.ts:66-68`). The paper has no equivalent
-problem.
+**Additional JS-specific friction**, neither of which the paper's Python REPL
+has. Both are handled with a targeted error hint rather than silently:
+
+- **No top-level `await`** — sub-calls must be wrapped in an async IIFE. Covered
+  by a system-prompt rule plus a hint appended to the `SyntaxError`.
+- **No re-declaration across turns** — because REPL variables genuinely persist
+  (see V-03), a `const`/`let` name declared in one turn cannot be re-declared in
+  a later one. Python rebinds freely; JS global script code does not. The
+  `SyntaxError` gets a hint explaining the name is held over from an earlier
+  turn. If trajectories show models tripping on this repeatedly, the fix is to
+  rewrite top-level `const`/`let` to `var` before execution.
 
 ### D-02 — Default model is MiniMax-M3, not GPT-5
 
@@ -194,6 +201,10 @@ checkout with no keys runs 113 tests and skips 2.
 
 **No CI.** `pnpm build && pnpm test` on a fresh checkout is unverified by
 machine, contrary to success criterion 4 of the design doc.
+
+**`pnpm lint` currently fails.** `packages/rlm-skills` has no
+`eslint.config.js`, so ESLint 9 aborts there (every other package has one).
+Pre-existing since `1c9502c`. Must be fixed before lint can be a CI gate.
 
 ---
 

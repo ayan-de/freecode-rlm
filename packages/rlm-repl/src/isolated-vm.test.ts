@@ -103,3 +103,93 @@ describe("IsolatedVmREPL.execute", () => {
     expect(r.error?.message).toBe("async-boom");
   });
 });
+
+// Paper §2: the REPL environment is persistent, and the model is expected to
+// "build up intermediate values and the final response into new variables"
+// across iterations (Algorithm 1: `(state, stdout) <- REPL(state, code)`).
+// Appendix C.1's canonical strategy chunks the context, sub-queries each
+// chunk, and accumulates answers into a buffer over several turns. All of
+// that requires declarations to outlive a single execute() call.
+// See VERIFICATION.md V-03.
+describe("IsolatedVmREPL state persistence across execute() calls", () => {
+  let repl: IsolatedVmREPL;
+  afterEach(async () => {
+    await repl?.dispose();
+  });
+
+  it("keeps a `const` binding visible to the next execute()", async () => {
+    repl = new IsolatedVmREPL();
+    await repl.execute("const buf = ['a'];");
+    const r = await repl.execute("buf.length");
+    expect(r.error).toBeUndefined();
+    expect(r.expression).toBe(1);
+  });
+
+  it("keeps a `let` binding visible and reassignable in the next execute()", async () => {
+    repl = new IsolatedVmREPL();
+    await repl.execute("let total = 3;");
+    const r = await repl.execute("total = total * 2; total");
+    expect(r.success).toBe(true);
+    expect(r.expression).toBe(6);
+  });
+
+  it("keeps a `var` binding visible to the next execute()", async () => {
+    repl = new IsolatedVmREPL();
+    await repl.execute("var n = 7;");
+    const r = await repl.execute("n + 1");
+    expect(r.success).toBe(true);
+    expect(r.expression).toBe(8);
+  });
+
+  it("keeps a function declaration callable in the next execute()", async () => {
+    repl = new IsolatedVmREPL();
+    await repl.execute("function head(s) { return s.slice(0, 2); }");
+    const r = await repl.execute("head('hello')");
+    expect(r.success).toBe(true);
+    expect(r.expression).toBe("he");
+  });
+
+  // The Appendix C.1 buffer pattern, in miniature: chunk, process, accumulate
+  // over successive turns, then aggregate.
+  it("accumulates into a buffer across several execute() calls", async () => {
+    repl = new IsolatedVmREPL();
+    await repl.execute("const buffers = [];");
+    await repl.execute("buffers.push('chunk-0 summary');");
+    await repl.execute("buffers.push('chunk-1 summary');");
+    const r = await repl.execute("buffers.join(' | ')");
+    expect(r.success).toBe(true);
+    expect(r.expression).toBe("chunk-0 summary | chunk-1 summary");
+  });
+
+  it("preserves earlier state when an execute() throws", async () => {
+    repl = new IsolatedVmREPL();
+    await repl.execute("const keep = 'safe';");
+    const bad = await repl.execute("throw new Error('boom')");
+    expect(bad.success).toBe(false);
+    const r = await repl.execute("keep");
+    expect(r.success).toBe(true);
+    expect(r.expression).toBe("safe");
+  });
+
+  it("still scopes stdout per call while sharing variables", async () => {
+    repl = new IsolatedVmREPL();
+    const first = await repl.execute("const label = 'x'; console.log('one');");
+    const second = await repl.execute("console.log(label + '-two');");
+    expect(first.stdout).toEqual(["one"]);
+    expect(second.stdout).toEqual(["x-two"]);
+    expect(repl.readStdout()).toEqual(["one", "x-two"]);
+  });
+
+  // Persistence has a JS-specific cost: a name declared with const/let in an
+  // earlier turn cannot be re-declared in a later one. Surface it the same way
+  // we surface the bare-top-level-await trap, so the model can recover.
+  it("hints that a redeclared identifier is held over from an earlier turn", async () => {
+    repl = new IsolatedVmREPL();
+    await repl.execute("const buf = ['a'];");
+    const r = await repl.execute("const buf = ['b'];");
+    expect(r.success).toBe(false);
+    expect(r.error?.name).toBe("SyntaxError");
+    expect(r.error?.message).toContain("already been declared");
+    expect(r.error?.message).toContain("earlier turn");
+  });
+});

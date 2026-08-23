@@ -3,9 +3,9 @@
 Audit of this repository against [PAPER_SPEC.md](PAPER_SPEC.md) and
 arXiv [2512.24601v3](https://arxiv.org/abs/2512.24601).
 
-**Audit date:** 2026-08-23
-**Commit:** `b9bb0d4` (branch `feat/skill-system-websearch`)
-**Suite at audit time:** 115 tests, 113 pass / 2 skipped (live-API tests).
+**First audited:** 2026-08-23 at `b9bb0d4`
+**Last updated:** 2026-08-23 — V-03 fixed
+**Suite:** 142 tests, 139 pass / 3 skipped (live-API tests).
 
 Status meanings:
 
@@ -27,55 +27,16 @@ behaviour rather than the paper's requirements.
 
 | Severity | Count | IDs |
 |---|---|---|
-| CRITICAL | 2 | V-03, V-04 |
+| CRITICAL | 1 | V-04 |
 | HIGH | 2 | V-01, V-02 |
 | MEDIUM | 3 | V-05, V-06, V-09 |
 | Reproduction gaps | 5 | V-10 … V-14 |
-| Passing | 10 | V-15 … V-24 |
+| Passing | 11 | V-03, V-15 … V-24 |
+| Fixed since first audit | 1 | V-03 |
 
 ---
 
 ## Failures
-
-### V-03 — CRITICAL — REPL state does not persist across iterations
-
-| | |
-|---|---|
-| **Requirement** | The REPL environment is persistent; each iteration updates REPL state, and the model builds intermediate values into new variables across turns. |
-| **Paper reference** | §2 ("initializes a **persistent** REPL programming environment"; "build up intermediate values and the final response into new variables"); Algorithm 1 `(state, stdout) ← REPL(state, code)`; App. C.1 (1a) — the canonical strategy is *"query an LLM per chunk … and save the answers to a buffer"* across turns. |
-| **Code location** | `packages/rlm-repl/src/isolated-vm.ts:46-64` |
-| **Status** | **FAIL** |
-
-User code is executed as `eval(__USER_CODE__)` inside an
-`(async function() { … })()` wrapper. Direct `eval` puts `const`, `let` **and**
-`var` declarations into the *wrapper's* scope, which is discarded when
-`execute()` returns. The isolate and context are correctly reused
-(`isolated-vm.ts:30-31`), so the mechanism is right — only the scoping is wrong.
-
-**Verified failure** (probe run against `IsolatedVmREPL`, 2026-08-23):
-
-```
-execute("const buffer = ['x']; buffer.length")  → success, 1
-execute("buffer.length")                        → ReferenceError: buffer is not defined
-execute("var vbuf = 7;") then execute("vbuf+1") → ReferenceError: vbuf is not defined
-```
-
-**Impact.** The paper's central multi-turn strategy — chunk, sub-query,
-accumulate into a buffer, aggregate — cannot run. Any trajectory longer than one
-code block loses all its work. Single-block tasks (our current e2e and NIAH
-tests) are unaffected, which is why this went unnoticed.
-
-**Why no test caught it.** No test executes two `execute()` calls against a real
-`IsolatedVmREPL` with a variable carried between them.
-
-**Minimal fix.** Hoist declarations to `globalThis` — either rewrite top-level
-`const`/`let`/`var` bindings before eval, or run user code via
-`context.evalClosure` at global scope instead of inside a function wrapper.
-
-**Regression test to add.** `isolated-vm.test.ts`: assign in call 1, read in
-call 2, for `const`, `let`, `var`, and a bare assignment.
-
----
 
 ### V-04 — CRITICAL — `FINAL_VAR` cannot resolve a model-created variable
 
@@ -107,10 +68,14 @@ it were correct).
 custom-defined variable" uses `FakeREPL`, not `IsolatedVmREPL`. The fake
 persists variables; the real implementation does not.
 
-**Minimal fix.** Implement `inspect()` against sandbox global state (enumerate
-`globalThis` in-isolate, minus the injected builtins, and copy out). Depends on
-V-03 being fixed first — until declarations reach global scope there is nothing
-to enumerate.
+**Minimal fix.** Resolve **by name**, not by enumeration. V-03 is fixed, so
+declarations now survive — but `const`/`let` at top level land in the global
+*lexical* environment, which is not a property bag: `Object.keys(globalThis)`
+will not list them. A lookup script (`typeof <name> !== 'undefined' ? <name> :
+undefined`, run as global code) reaches both lexical bindings and
+`globalThis` properties. `FINAL_VAR(name)` already has the name, so this is
+the natural shape; `inspect()`'s enumerate-everything contract should narrow
+to a `lookup(name)` the core actually needs.
 
 ---
 
@@ -234,6 +199,7 @@ Until at least one of these produces a number, the README must report
 
 | ID | Requirement | Paper ref | Code | Test | Status |
 |---|---|---|---|---|---|
+| V-03 | REPL state persists across iterations; the model accumulates values into variables over turns | §2 ("**persistent** REPL"; "build up intermediate values … into new variables"); Alg. 1 `(state, stdout) ← REPL(state, code)`; App. C.1 (1a) buffer strategy | `isolated-vm.ts` `execute()` | `isolated-vm.test.ts` — "IsolatedVmREPL state persistence across execute() calls" (8 tests) | `PASS` — **fixed 2026-08-23**, see below |
 | V-15 | Prompt `P` is loaded as a REPL variable, never as a message | §2, Alg. 1 `InitREPL(prompt=P)` | `rlm.ts:103` | `rlm.test.ts:157` "loads the prompt as `context` in the REPL" | `PASS` |
 | V-16 | `llm_query` callable from inside the REPL | App. C.1 (1a) item 2 | `bridge.ts` | `bridge.test.ts:10`; `rlm.test.ts:212` | `PASS` |
 | V-17 | `rlm_query` spawns a nested RLM with its own REPL | §2; App. C.1 (1c) | `rlm.ts:427-460` | `rlm.test.ts:227` "sub-RLM is invoked when rlm_query is called" | `PASS` |
@@ -242,18 +208,63 @@ Until at least one of these produces a number, the README must report
 | V-20 | Literal `FINAL(...)` returns its argument | App. C.1 (1a) option 1 | `final.ts` | `final.test.ts:5` | `PASS` |
 | V-21 | Code is delimited by a ` ```repl ` fence | App. C.1 (1a) | `code-extract.ts` | `code-extract.test.ts:5` | `PASS` |
 | V-22 | Sub-calls are blocking / sequential | App. B (stated as the authors' behaviour) | `rlm.ts:413-425` | — | `PASS*` — matches by construction |
-| V-23 | REPL isolate/context is reused across iterations | §2 "persistent" | `isolated-vm.ts:30-31` | — | `PASS*` — the container persists; its contents do not, see V-03 |
+| V-23 | REPL isolate/context is reused across iterations | §2 "persistent" | `isolated-vm.ts:30-31` | covered by the V-03 suite | `PASS` |
 | V-24 | Recursion is bounded and cost-capped | §5, App. B | `budget.ts` | `budget.test.ts`; `rlm.test.ts:243` | `PASS` — beyond the paper, which states no cap |
 
 ---
 
 ## Fix order
 
-1. **V-03** — restore variable persistence. Everything multi-turn depends on it.
-2. **V-04** — implement real `inspect()`. Blocked on V-03.
+1. ~~**V-03** — restore variable persistence.~~ **Done 2026-08-23.**
+2. **V-04** — resolve `FINAL_VAR` by name against sandbox scope. Unblocked by V-03.
 3. **V-01** — truncate at 20,000 chars/block.
 4. **V-02** — inject context metadata into the system prompt.
 5. Re-audit, then build the eval harness (V-10 … V-14) and attempt OOLONG
    `trec_coarse` first — cheapest row in Table 1 that exercises sub-calls.
 
 V-05, V-06 and V-09 need no code change; they need to stay documented.
+
+---
+
+## Fix log
+
+### V-03 — fixed 2026-08-23
+
+**Root cause.** `execute()` ran the model's code as
+`eval(__USER_CODE__)` inside an `(async function(){ … })()` wrapper. Direct
+`eval` records `const`, `let` **and** `var` declarations in the *wrapper's*
+scope, which is discarded on return. The isolate and context were already
+reused correctly (`isolated-vm.ts:30-31`) — only the scoping was wrong.
+
+Measured before the fix:
+
+```
+execute("const buf = ['x']; buf.length")  → 1
+execute("buf.length")                     → ReferenceError: buf is not defined
+execute("var n = 7") → execute("n + 1")   → ReferenceError: n is not defined
+```
+
+**Fix.** Run the model's code as **top-level global script code**
+(`isolate.compileScript(code).run(context)`) instead of inside a wrapper.
+Global code records declarations in the context's global lexical environment,
+which lives as long as the isolate. Dropping the wrapper cost us the closure
+that held stdout capture and the FINAL side-channel, so those are now
+bracketed by two small control scripts (`runControlScript` / `collectTail`)
+that run before and after the user's code — the tail collector runs whether
+the code succeeded, threw, or timed out, so partial output is never lost.
+
+`const`, `let`, `var`, function declarations and object mutation all persist.
+Verified with 8 tests, including the Appendix C.1 buffer pattern (accumulate
+across four calls, then aggregate) and survival of state across a throwing
+call.
+
+**Known cost.** A `const`/`let` name declared in an earlier turn cannot be
+re-declared in a later one — real JS global-script semantics, and the price of
+genuine persistence. `execute()` now appends a recovery hint to that
+`SyntaxError` explaining that the name is held over and suggesting assignment
+or a new name, mirroring the existing bare-top-level-`await` hint. Worth
+revisiting if trajectories show models tripping on it often.
+
+**Also fixed incidentally.** The old outer `catch` returned the *cumulative*
+`this.stdout` rather than the current call's output. Per-call stdout is now
+consistent on every path.

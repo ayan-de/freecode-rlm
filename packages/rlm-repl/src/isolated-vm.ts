@@ -16,6 +16,29 @@ const console = {
 };
 `;
 
+/**
+ * Attach a recovery hint to the two errors the sandbox's execution model
+ * makes easy to hit but hard to read. Both are artefacts of running the
+ * model's code as persistent global script code rather than as an eval'd
+ * function body.
+ */
+function withHint(name: string, message: string): string {
+  if (name === "SyntaxError" && message.includes("await is only valid")) {
+    return (
+      message +
+      " — wrap your code in an async IIFE: (async () => { ...your code... })()"
+    );
+  }
+  if (name === "SyntaxError" && message.includes("already been declared")) {
+    return (
+      message +
+      " — REPL variables persist between turns, so this name is held over from" +
+      " an earlier turn. Assign to it (`name = ...`) or choose a new name."
+    );
+  }
+  return message;
+}
+
 export class IsolatedVmREPL implements REPL {
   private isolate: ivm.Isolate;
   private context: ivm.Context;
@@ -46,75 +69,98 @@ export class IsolatedVmREPL implements REPL {
   async execute(code: string, opts?: { timeoutMs?: number }): Promise<REPLResult> {
     const timeout = opts?.timeoutMs ?? this.timeoutMs;
     const start = Date.now();
-    // Wrap user code so we capture the final expression AND the sandbox-side __stdout
-    // after execution. We use a function wrapper that returns both, then transfer the
-    // captured stdout back to the host via copy: true.
-    const wrapper =
-      "(async function() {" +
-      "  const __capturedStdout = [];" +
-      "  const __origPush = __stdout.push.bind(__stdout);" +
-      "  __stdout.push = (...args) => { __capturedStdout.push(args.map(a =>" +
-      "    typeof a === 'string' ? a : JSON.stringify(a)" +
-      "  ).join(' ')); return __origPush(...args); };" +
-      // Reset the side-channel before running so a call from a PRIOR
-      // execute() doesn't leak forward as a false-positive FINAL here.
-      "  globalThis.__finalCall = undefined;" +
-      "  try {" +
-      "    const __result = eval(__USER_CODE__);" +
-      "    return { success: true, value: await __result, captured: __capturedStdout, finalCall: globalThis.__finalCall };" +
-      "  } catch (e) {" +
-      "    let __msg = e.message;" +
-      "    if (e instanceof SyntaxError && __msg.indexOf('await is only valid') !== -1) {" +
-      "      __msg += ' — wrap your code in an async IIFE: (async () => { ...your code... })()';" +
-      "    }" +
-      "    return { success: false, error: { name: e.name, message: __msg, trace: e.stack || '' }, captured: __capturedStdout, finalCall: globalThis.__finalCall };" +
-      "  }" +
-      "})()";
-    const scriptSrc = wrapper.replace("__USER_CODE__", JSON.stringify(code));
+
+    // User code runs as top-level GLOBAL code, not inside a function wrapper.
+    // That is what makes `const`/`let`/function declarations outlive the call:
+    // global code records them in the context's global lexical environment,
+    // which lives as long as the isolate. Running the same source through
+    // `eval()` inside a wrapper scopes those declarations to the wrapper and
+    // discards them on return, so every iteration started from a blank slate
+    // (paper §2 requires a persistent environment — see VERIFICATION.md V-03).
+    //
+    // The cost of dropping the wrapper is that stdout capture and the FINAL
+    // side-channel no longer have a closure to live in, so they are bracketed
+    // by two small scripts around the user's code instead.
+    this.runControlScript(
+      // Mark where this call's output starts, and clear the side-channel so a
+      // FINAL from a PRIOR execute() can't leak forward as a false positive.
+      "globalThis.__mark = __stdout.length; globalThis.__finalCall = undefined;",
+    );
+
+    let value: unknown;
+    let failure: { name: string; message: string; trace: string } | undefined;
     try {
-      const script = this.isolate.compileScriptSync(scriptSrc);
-      const ref = (await script.run(this.context, {
+      // compileScriptSync throws for syntax errors (e.g. bare top-level
+      // await); run() throws for runtime errors, rejections and timeouts.
+      const script = this.isolate.compileScriptSync(code);
+      value = await script.run(this.context, {
         timeout,
         promise: true,
         copy: true,
-      })) as
-        | { success: true; value: unknown; captured: string[]; finalCall?: unknown }
-        | {
-            success: false;
-            error: { name: string; message: string; trace: string };
-            captured: string[];
-            finalCall?: unknown;
-          };
-      for (const line of ref.captured) this.stdout.push(line);
-      if (ref.success) {
-        return {
-          success: true,
-          stdout: [...ref.captured],
-          expression: ref.value,
-          finalCall: ref.finalCall,
-          durationMs: Date.now() - start,
-        };
-      }
-      return {
-        success: false,
-        stdout: [...ref.captured],
-        error: ref.error,
-        finalCall: ref.finalCall,
-        durationMs: Date.now() - start,
-      };
+      });
     } catch (e: unknown) {
       const err = e as { name?: string; message?: string; stack?: string };
-      // isolated-vm timeout throws "Script execution timed out."
+      const name = err.name ?? "Error";
+      failure = {
+        name,
+        message: withHint(name, err.message ?? String(e)),
+        trace: err.stack ?? "",
+      };
+    }
+
+    const tail = this.collectTail();
+    for (const line of tail.captured) this.stdout.push(line);
+
+    if (failure) {
       return {
         success: false,
-        stdout: [...this.stdout],
-        error: {
-          name: err.name ?? "Error",
-          message: err.message ?? String(e),
-          trace: err.stack ?? "",
-        },
+        stdout: tail.captured,
+        error: failure,
+        finalCall: tail.finalCall,
         durationMs: Date.now() - start,
       };
+    }
+    return {
+      success: true,
+      stdout: tail.captured,
+      expression: value,
+      finalCall: tail.finalCall,
+      durationMs: Date.now() - start,
+    };
+  }
+
+  /**
+   * Run a trusted bookkeeping script in the sandbox. Failures here are not
+   * the model's problem, so they are swallowed — a torn-down isolate (OOM,
+   * terminated by timeout) is the expected cause.
+   */
+  private runControlScript(src: string): void {
+    try {
+      this.isolate.compileScriptSync(src).runSync(this.context, { timeout: 1000 });
+    } catch {
+      // isolate is unusable; execute() reports the underlying error instead.
+    }
+  }
+
+  /**
+   * Collect the stdout produced since the mark, plus whatever FINAL/FINAL_VAR
+   * recorded on the side-channel. Runs after user code whether it succeeded,
+   * threw, or timed out, so partial output is never lost.
+   */
+  private collectTail(): { captured: string[]; finalCall?: unknown } {
+    try {
+      const script = this.isolate.compileScriptSync(
+        "(function() { return {" +
+          " captured: __stdout.slice(globalThis.__mark || 0)," +
+          " finalCall: globalThis.__finalCall" +
+          " }; })()",
+      );
+      return script.runSync(this.context, { timeout: 1000, copy: true }) as {
+        captured: string[];
+        finalCall?: unknown;
+      };
+    } catch {
+      return { captured: [] };
     }
   }
 
