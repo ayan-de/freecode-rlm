@@ -1,20 +1,23 @@
 {
-  "name": "@freecode-rs/core",
+  "name": "@freecode-rs/skill-websearch",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "lint": "eslint src"
   },
-  "dependencies": {
-    "@freecode-rs/client": "workspace:*",
-    "@freecode-rs/repl": "workspace:*",
-    "@freecode-rs/skill-websearch": "workspace:*"
-  },
+  "freecodeSkill": true,
+  "files": ["dist"],
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",
     "@repo/typescript-config": "workspace:*",

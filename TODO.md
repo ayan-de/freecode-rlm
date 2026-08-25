@@ -1,6 +1,91 @@
-# TODO — Porting from the Python `rlm/` reference
+# TODO
 
-`freecode-rlm` is the **TypeScript port** of the Python reference at `githubProjects/agents/rlm/rlm/`. Prime-agent (`githubProjects/agents/rlm/prime-agent/`) is a *separate* project — a full coding-agent harness that *uses* an RLM core as one of its tools. It's not the reference for this port.
+Two trackers, deliberately separate:
+
+| Tracker | Measures against | Lives in |
+|---|---|---|
+| **Paper fidelity** (below) | the paper, arXiv 2512.24601v3 | [VERIFICATION.md](VERIFICATION.md) — `V-nn` IDs |
+| **Port gaps** (further down) | the authors' Python repo | this file |
+
+Fidelity work **outranks** port work: a missing environment backend is a
+feature gap, a fidelity `FAIL` means we are not implementing the paper.
+
+---
+
+## Paper fidelity — open
+
+Each item's full write-up (paper anchor, code location, impact, minimal fix,
+regression test to add) is the matching section in [VERIFICATION.md](VERIFICATION.md).
+
+### P0 — blockers for a trustworthy eval
+
+Both must land **before** any benchmark run. Without them the eval measures
+something other than an RLM as the paper defines it, and the number would be
+neither correct nor attributable.
+
+- [ ] **V-01 — truncate stdout before it enters history** (HIGH)
+  §2 + fn. 2: only constant-size metadata about stdout may reach the root's
+  history. `formatResult` (`utils/messages.ts:33-40`) passes it whole.
+  Reference value: 20,000 chars per block, tail-trimmed with a
+  `... + [N chars...]` marker (`rlm/utils/parsing.py:26,59-62`).
+- [ ] **V-02 — inject context metadata into the system prompt** (HIGH)
+  §2 + App. C.1 (1a) template slots `{context_type}`,
+  `{context_total_length}`, `{context_lengths}`. `buildSystemPrompt`
+  (`prompt.ts:29-37`) is static, so the model's first move is a blind probe.
+  Expect this to surface **AMB-08** (context is string-only; the paper's
+  template implies it may be a list of chunks). Shipping with
+  `chunkLengths: [totalLength]` and a note is fine.
+- [ ] **Make compaction opt-in, off by default** — follows V-01.
+  Compaction exists to mask V-01. Once stdout can't flood the window it is no
+  longer load-bearing, and the paper treats compaction as the baseline RLMs
+  beat, not a component (§1, §3.2). See REPRODUCTION_NOTES D-05.
+
+### P1 — reproduction (V-10 … V-14)
+
+No eval harness exists; every Table 1 number is unmeasured. Needs a spending
+decision before design — this is the first step with a real API bill.
+
+- [ ] Benchmark-agnostic harness: pinned config, logged seed + environment,
+      raw metrics saved, observed-vs-reported comparison, outcome labelled
+      MATCH / PARTIAL / NOT REPRODUCED.
+- [ ] **V-10 S-NIAH** first, as a harness shakedown — cheap, RULER protocol,
+      grows out of the existing `rlm.niah.test.ts` smoke test.
+- [ ] **V-12 OOLONG-Pairs** as the headline — 32K × 20 queries is far cheaper
+      than OOLONG's 131K × 50, and it is Table 1's most dramatic row
+      (base 0.1 → RLM depth=1 58.0). Built from the query list in App. D.1.
+- [ ] V-11 OOLONG `trec_coarse`, V-13 BrowseComp-Plus, V-14 CodeQA — later.
+
+### P2 — release hygiene
+
+None of the work above is visible to a reader until these are done.
+
+- [ ] `packages/rlm-skills/eslint.config.js` — missing since `1c9502c`, so
+      `pnpm lint` fails repo-wide. One file.
+- [ ] CI running `pnpm build && pnpm test && pnpm lint` — success criterion 4
+      of the design doc, still unmet.
+- [ ] `LICENSE`, and check the authors' license for compatibility.
+- [ ] README: strip `/home/ayan-de/...` paths (also in AGENTS.md), reframe from
+      "learning project" to an independent implementation, state plainly that
+      this is not the official repo, and link VERIFICATION.md prominently.
+
+## Paper fidelity — closed
+
+- [x] **V-03 — REPL state persists across iterations** (CRITICAL) — fixed
+      2026-08-23 (`f299636`). Model code now runs as top-level global script
+      code, so `const`/`let`/`var`/function declarations outlive the call.
+- [x] **V-04 — `FINAL_VAR` resolves against sandbox scope** (CRITICAL) — fixed
+      2026-08-23 (`7c38495`). `inspect()` replaced by `lookup(name)`, which
+      evaluates the identifier as global code and so reaches global lexical
+      bindings that cannot be enumerated.
+
+Accepted deviations needing no code change, only documentation: V-05
+(last code block only), V-06 (`rlm_query` arity).
+
+---
+
+# Port gaps — the Python `rlm/` reference
+
+`freecode-rlm` is also the **TypeScript port** of the Python reference at `githubProjects/agents/rlm/rlm/`. Prime-agent (`githubProjects/agents/rlm/prime-agent/`) is a *separate* project — a full coding-agent harness that *uses* an RLM core as one of its tools. It's not the reference for this port.
 
 The right gap analysis is against `rlm/rlm/`.
 

@@ -11,10 +11,10 @@ import type { CoreREPL, CoreREPLResult } from "./types.js";
  * eval-based semantics of IsolatedVmREPL: the last expression of the
  * user's code is returned as `expression`.
  *
- * Implementation: eval user code with helper functions injected as
- * globalThis.PRINT / FINAL / FINAL_VAR. The user-defined `let`/`var`
- * declarations land on globalThis (no function wrapper, no strict
- * mode) so FINAL_VAR() can resolve them via inspect().
+ * Implementation: indirect-eval user code with helper functions injected as
+ * globalThis.PRINT / FINAL / FINAL_VAR. Indirect eval runs as global code, so
+ * `var` declarations and bare assignments land on globalThis and FINAL_VAR()
+ * can resolve them via lookup().
  */
 class FakeREPL implements CoreREPL {
   private bindings = new Map<string, unknown>();
@@ -53,29 +53,6 @@ class FakeREPL implements CoreREPL {
     }
     try {
       const expression = (0, eval)(code);
-      // Harvest any new globals the user code defined. Skip built-ins
-      // by excluding keys we already know about (bindings + helpers).
-      const known = new Set([
-        ...this.bindings.keys(),
-        "PRINT",
-        "FINAL",
-        "FINAL_VAR",
-      ]);
-      const g = globalThis as Record<string, unknown>;
-      for (const key of Object.keys(g)) {
-        if (known.has(key)) continue;
-        if (key === "globalThis" || key === "self" || key === "window") continue;
-        if (typeof g[key] === "function") continue;
-        // Skip read-only globals we can't reliably re-set later.
-        try {
-          // Probe: try to assign a clone back to itself. If it fails,
-          // the slot is read-only and we should skip it.
-          (globalThis as Record<string, unknown>)[key] = g[key];
-        } catch {
-          continue;
-        }
-        this.bindings.set(key, g[key]);
-      }
       return { success: true, stdout: [...this.stdout], expression, durationMs: Date.now() - start };
     } catch (err) {
       const e = err as Error;
@@ -92,8 +69,9 @@ class FakeREPL implements CoreREPL {
     return [...this.stdout];
   }
 
-  async inspect(): Promise<Record<string, unknown>> {
-    return Object.fromEntries(this.bindings);
+  async lookup(name: string): Promise<unknown> {
+    const g = globalThis as Record<string, unknown>;
+    return name in g ? g[name] : this.bindings.get(name);
   }
 
   async dispose(): Promise<void> {
@@ -237,6 +215,23 @@ describe("RLM (bridge, recursion, budget)", () => {
     expect(result.response).toBe("child answer");
     expect(result.metadata.depthReached).toBe(1);
     expect(result.metadata.totalSubCalls).toBe(1);
+    await repl.dispose();
+  });
+
+  // Regression for VERIFICATION.md V-04. The FakeREPL-based FINAL_VAR test
+  // above passed while the real sandbox could not resolve a model-created
+  // variable at all, so this one deliberately runs against IsolatedVmREPL and
+  // builds the variable up over two turns, the way Appendix C.1 describes.
+  it("resolves FINAL_VAR against a variable the model built in the real sandbox", async () => {
+    const client = new MockLMClient([
+      { role: "assistant", content: "```repl\nconst buffers = [];\nbuffers.push('part-1');\n```" },
+      { role: "assistant", content: "```repl\nbuffers.push('part-2');\nconst report = buffers.join(' + ');\nFINAL_VAR('report')\n```" },
+    ]);
+    const repl = new IsolatedVmREPL();
+    const rlm = new RLM({ client, repl, maxIterations: 5 });
+    const result = await rlm.completion("build a report");
+    expect(result.response).toBe("part-1 + part-2");
+    expect(result.metadata.finishedReason).toBe("final");
     await repl.dispose();
   });
 

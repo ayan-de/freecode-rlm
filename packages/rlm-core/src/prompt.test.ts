@@ -31,4 +31,31 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toMatch(/readFile\(/);
     expect(prompt).toMatch(/writeFile\(/);
   });
+
+  it("omits the skills section when none are provided", () => {
+    const p = buildSystemPrompt();
+    expect(p).not.toContain("Installed skills");
+  });
+
+  it("lists each installed skill with name and description", () => {
+    const p = buildSystemPrompt({
+      skills: [
+        { name: "websearch", description: "Search Google via Serper." },
+        { name: "echo", description: "Echoes input." },
+      ],
+    });
+    expect(p).toContain("Installed skills");
+    expect(p).toContain("`websearch(...args): Promise<string>` — Search Google via Serper.");
+    expect(p).toContain("`echo(...args): Promise<string>` — Echoes input.");
+    expect(p).toContain("await <name>(...args)");
+  });
+
+  it("combines the skills section with the system tools addendum", () => {
+    const p = buildSystemPrompt({
+      enableSystemTools: true,
+      skills: [{ name: "websearch", description: "x" }],
+    });
+    expect(p).toContain("bash(command:");
+    expect(p).toContain("Installed skills");
+  });
 });

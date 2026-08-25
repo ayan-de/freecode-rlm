@@ -5,7 +5,9 @@ import type { ChatMessage } from "@freecode-rs/client";
 import {
   installBridge,
   installBuiltins,
+  installSkills,
   IsolatedVmREPL,
+  type Skill,
 } from "@freecode-rs/repl";
 import type {
   CoreREPL,
@@ -37,6 +39,7 @@ export class RLM {
   private readonly currentDepth: number;
   private readonly budget: Budget;
   private readonly enableSystemTools: boolean;
+  private readonly skills: ReadonlyArray<Skill>;
   // Compaction is opt-in: caller passes `opts.compaction` to enable it.
   // When undefined, no compaction runs and the trajectory can grow
   // unbounded (which is fine for short completions).
@@ -63,6 +66,7 @@ export class RLM {
     this.maxIterations = opts.maxIterations ?? 50;
     this.verbose = opts.verbose ?? false;
     this.enableSystemTools = opts.enableSystemTools ?? false;
+    this.skills = opts.skills ?? [];
     // Compaction defaults to enabled when opts.compaction is passed at
     // all — the caller opts out with `{ enabled: false }`. We don't
     // apply defaults from DEFAULT_COMPACTION_OPTIONS here; that
@@ -73,7 +77,10 @@ export class RLM {
       : undefined;
     this.systemPrompt =
       opts.systemPrompt ??
-      buildSystemPrompt({ enableSystemTools: this.enableSystemTools });
+      buildSystemPrompt({
+        enableSystemTools: this.enableSystemTools,
+        skills: this.skills,
+      });
     this.currentDepth = internal?.currentDepth ?? 0;
     this.budget =
       internal?.budget ??
@@ -111,6 +118,7 @@ export class RLM {
             }
           : {}),
       });
+      installSkills(this.repl, [...this.skills]);
     }
 
     const iterations: Iteration[] = [];
@@ -187,8 +195,8 @@ export class RLM {
           replResult: { success: true, stdout: [], durationMs: 0 },
           subCallsAtStart: this.budget.subCalls,
         });
-        const textFinal = await extractFinalFromText(assistantMessage.content, () =>
-          this.repl.inspect(),
+        const textFinal = await extractFinalFromText(assistantMessage.content, (n) =>
+          this.repl.lookup(n),
         );
         finalAnswer = textFinal ? textFinal.answer : assistantMessage.content;
         finishedReason = "final";
@@ -209,7 +217,7 @@ export class RLM {
         );
       }
 
-      const final = await extractFinal(replResult, () => this.repl.inspect());
+      const final = await extractFinal(replResult, (n) => this.repl.lookup(n));
       if (final) {
         finalAnswer = final.answer;
         finishedReason = "final";

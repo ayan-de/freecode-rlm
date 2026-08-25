@@ -87,8 +87,8 @@ class FakeREPL implements CoreREPL {
     return [...this.stdout];
   }
 
-  async inspect(): Promise<Record<string, unknown>> {
-    return Object.fromEntries(this.bindings);
+  async lookup(name: string): Promise<unknown> {
+    return this.bindings.get(name);
   }
 
   async dispose(): Promise<void> {

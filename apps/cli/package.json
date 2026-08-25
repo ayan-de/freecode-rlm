@@ -16,6 +16,7 @@
     "@freecode-rs/core": "workspace:*",
     "@freecode-rs/client": "workspace:*",
     "@freecode-rs/repl": "workspace:*",
+    "@freecode-rs/skill-websearch": "workspace:*",
     "commander": "^12.1.0"
   },
   "devDependencies": {
