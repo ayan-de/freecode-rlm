@@ -1,0 +1,57 @@
+/* freecode-rlm docs — custom theming on top of nextra-theme-blog */
+
+:root {
+  --font-mono: var(--font-departure-mono), ui-monospace, SFMono-Regular,
+    Menlo, Consolas, monospace;
+  --font-sans: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, sans-serif;
+}
+
+html {
+  color-scheme: light dark;
+}
+
+/* Departure Mono is a pixel font — keep body in Inter, code/headings in mono */
+body {
+  font-family: var(--font-sans);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
+/* Use Departure Mono for code blocks, inline code, and post titles */
+:not(pre) > code,
+code,
+pre,
+pre code,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+.nextra-post-title,
+.nextra-sidebar-title {
+  font-family: var(--font-mono);
+}
+
+/* Slight tracking adjustments for the pixel font */
+h1,
+.nextra-post-title {
+  letter-spacing: -0.02em;
+}
+
+h2,
+h3 {
+  letter-spacing: -0.01em;
+}
+
+/* Tighten code blocks a touch to match the pixel grid */
+pre {
+  letter-spacing: 0;
+  font-size: 0.95em;
+  line-height: 1.55;
+}
+
+/* Post list cards: keep the technical vibe */
+.nextra-card {
+  border: 1px solid var(--nextra-border-color, rgba(127, 127, 127, 0.2));
+}

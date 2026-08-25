@@ -1,0 +1,98 @@
+---
+title: "Why a TypeScript Recursive Language Model"
+date: 2026-08-25
+description: >
+  The opening entry: what we're building, why we re-implemented instead of
+  porting, and how the monorepo is laid out.
+tags: [architecture, motivation]
+author: ayan-de
+---
+
+> "If I cannot make it then I do not understand it."
+> — the only rule that matters
+
+## The premise
+
+Recursive Language Models (RLMs) are a recent idea from Zhang, Kraska, and
+Khattab: instead of asking an LM to *read* a giant context, you give it a
+REPL and let it write code that inspects the context programmatically. It can
+chunk the context, run regexes, count things — and, when it gets stuck on a
+sub-task, it can spawn a child LM call (`llm_query`) or a child RLM
+(`rlm_query`) to get help.
+
+The official Python implementation lives at
+[`alexzhang13/rlm`](https://github.com/alexzhang13/rlm). The paper is on
+[arXiv](https://arxiv.org/abs/2512.24601). The minimal version is roughly
+300 lines in two files.
+
+So why rebuild it in TypeScript?
+
+## Why TypeScript, why from scratch
+
+Two reasons, in order of importance:
+
+1. **To understand it.** Wrapping a Python repo doesn't teach you anything
+   about the architecture. Every choice in this codebase — the interface
+   shapes, the sandbox model, the recursion budget — was made by us, after
+   reading the reference but not copying from it. Every public function has a
+   test. Every test pins down an architectural decision.
+
+2. **Because the shape translates.** The RLM idea is language-agnostic. A
+   REPL, a client, a loop, and a budget. TypeScript's strict mode is actually
+   *helpful* here — it forces every interface between the REPL, the client,
+   and the loop to be explicit, which means the seams are visible.
+
+## How the monorepo is shaped
+
+Three packages + two apps. The package boundaries matter:
+
+```
+apps/
+  cli/       → @freecode-rs/cli, command-line entry
+  web/       → marketing landing page (Next.js, pre-existing)
+  docs/      → this site (Nextra)
+packages/
+  rlm-core/  → @freecode-rs/core, the RLM class, loop, budget
+  rlm-client/→ @freecode-rs/client, LMClient + Vercel AI SDK adapter
+  rlm-repl/  → @freecode-rs/repl, REPL interface + isolated-vm impl
+  ...
+```
+
+The dependency direction is strict and one-way:
+
+```
+rlm-core ──▶ REPL (interface, from rlm-repl)
+rlm-core ──▶ LMClient (interface, from rlm-client)
+rlm-repl ──▶ rlm-core (depends on the interface)
+rlm-client ─▶ rlm-core (depends on the interface)
+apps/cli ──▶ all of the above
+```
+
+`rlm-core` knows nothing about isolated-vm or the AI SDK. It consumes two
+interfaces and that's it. The implementations live in their own packages.
+This is the seam that lets us swap in a mock REPL or a mock client during
+testing without touching the loop.
+
+## What "recursive" actually means
+
+The single thing that makes this different from "LM with code execution" is
+the *recursive* part. The model can call `rlm_query(prompt)`, which spawns a
+*child* RLM with its own REPL, its own iteration loop, and its own sub-call
+budget. The child can do the same. We bound it with a depth limit (default 3,
+so a depth-3 RLM's children fall back to flat `llm_query`).
+
+When a sub-RLM hits the depth cap, it *silently degrades* into a flat LM
+call rather than erroring. The model is encouraged to recurse; we don't want
+to punish it when the budget runs out.
+
+## What's next
+
+In the following posts I'll walk through the two hardest parts of the
+implementation:
+
+1. The sandbox — how `isolated-vm` lets user-written code call back into the
+   host LM without deadlocking or breaking isolation.
+2. The loop — how the iteration budget, sub-call budget, and FINAL detection
+   combine into a usable runtime.
+
+Both have interesting failure modes. Both have tests worth reading.

@@ -1,0 +1,22 @@
+{
+  "extends": "@repo/typescript-config/nextjs.json",
+  "compilerOptions": {
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "strictNullChecks": true,
+    "moduleResolution": "Bundler"
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    "**/*.mdx",
+    "next-env.d.ts",
+    "next.config.mjs",
+    "mdx-components.tsx",
+    ".next/types/**/*.ts"
+  ],
+  "exclude": ["node_modules", ".next", "out"]
+}

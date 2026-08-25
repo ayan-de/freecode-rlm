@@ -1,0 +1,43 @@
+---
+title: About
+---
+
+# freecode-rlm
+
+A production-grade **Recursive Language Model** (RLM) runtime in TypeScript.
+The LLM writes JavaScript inside a sandboxed REPL, inspects large contexts
+programmatically, and calls sub-LM or sub-RLM functions when it needs help.
+
+> "If I cannot make it then I do not understand it."
+> Reimplement, never import from upstream RLM repos.
+
+## What this project is
+
+- **A learning project.** We study three reference implementations and re-build
+  the architecture from scratch in TypeScript with strict typing.
+- **A faithful, smaller runtime.** The Python reference is the source of truth;
+  we keep the same shape (RLM loop, sandbox REPL, sub-LM calls, budget, depth
+  limits, compaction) but with TS idioms where they help.
+- **Open development.** Every public function has a test. Every commit is small.
+  Every decision has a reason.
+
+## Where to look
+
+- [`docs/superpowers/specs/2026-08-10-freecode-rlm-design.md`](https://github.com/your-org/freecode-rlm)
+  — the design spec.
+- [`docs/superpowers/plans/2026-08-10-freecode-rlm.md`](https://github.com/your-org/freecode-rlm)
+  — the milestone plan (M0 bootstrap → M5 polish).
+- `packages/rlm-core` — the RLM loop, budget, compaction, final-answer detection.
+- `packages/rlm-client` — the LM provider adapters (Vercel AI SDK).
+- `packages/rlm-repl` — the sandboxed REPL (isolated-vm) and host bridge.
+- `apps/cli` — the command-line entry point.
+
+## References we learn from
+
+- [Recursive Language Models — Zhang, Kraska, Khattab](https://arxiv.org/abs/2512.24601)
+- [Author write-up](https://alexzhang13.github.io/blog/2025/rlm/)
+- Official Python implementation: [`alexzhang13/rlm`](https://github.com/alexzhang13/rlm)
+
+## License
+
+MIT.

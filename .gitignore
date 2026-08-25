@@ -27,6 +27,9 @@ out/
 build
 dist
 
+# Pagefind (nextra search index, regenerated on build)
+public/_pagefind/
+
 
 # Debug
 npm-debug.log*

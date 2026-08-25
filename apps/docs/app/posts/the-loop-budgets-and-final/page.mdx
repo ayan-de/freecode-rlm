@@ -1,0 +1,103 @@
+---
+title: "The loop: budgets, depth, and FINAL"
+date: 2026-08-25
+description: >
+  How the RLM loop tracks iteration budget, recursion depth, and detects
+  when the model has produced a final answer.
+tags: [loop, budget, recursion]
+author: ayan-de
+---
+
+Once you have a REPL that can call `llm_query` and `rlm_query`, the loop is
+deceptively short. The hard part is the *budgets* — three independent counters
+that have to work together across recursive sub-calls.
+
+## The loop, in 8 lines
+
+```text
+1. Load user prompt as the REPL variable `context`.
+2. Initialize REPL scope with: llm_query, rlm_query, PRINT, FINAL,
+   FINAL_VAR, context.
+3. Loop up to maxIterations times:
+   a. Build messages = [system, ...history]
+   b. client.chat(messages) → assistant turn
+   c. Extract the last ```repl fenced block
+   d. Append assistant turn to history
+   e. REPL.execute(code) → result
+   f. Append result to history
+   g. If result.expression is a FINAL sentinel, break
+4. If maxIterations reached, return last assistant text + warning.
+```
+
+That's the whole thing. The architecture is in step 1 (what's in scope), the
+system prompt (which is just a markdown file with bullets), and the budgets
+that govern steps 3a–3g.
+
+## Three budgets, three purposes
+
+| Budget | Default | What it bounds |
+|---|---|---|
+| `maxIterations` | 50 | Outer loop iterations per `completion()`. Each iteration = one LM call + one REPL execute. |
+| `maxSubCalls` | 100 | Total LM calls (LLM or RLM) across all depths of one root run. |
+| `maxDepth` | 3 | Recursion limit. Depth-3 RLM's children degrade to flat LM calls. |
+
+`maxIterations` is per-call — a child RLM gets its own counter. `maxSubCalls`
+is shared across the whole tree, so a depth-0 RLM and its depth-1 children
+together can't make more than 100 LM calls. This is the cost guardrail.
+
+`maxDepth` is the interesting one. It doesn't error when the cap is reached;
+it **degrades silently**. If the model is at depth `maxDepth - 1` and calls
+`rlm_query(prompt)`, the bridge inside the sandbox just calls `llm_query`
+instead. A debug-mode flag (`verbose: true`) prints a one-liner so you can
+see when this happens.
+
+Why silent degradation? Two reasons:
+
+1. **We want the model to keep trying.** A model that gets an error every
+   time it tries to recurse will quickly give up; a model that gets a useful
+   answer from a "downgraded" call will keep iterating.
+2. **It matches the Python original.** `rlm-minimal/main.py` does the same.
+
+## FINAL detection
+
+Two supported patterns:
+
+```js
+FINAL("the answer is 42")      // literal answer
+FINAL_VAR("result")            // by variable name in scope
+```
+
+`FINAL`/`FINAL_VAR` aren't real functions; they're sentinel markers. The
+sandbox-side shim for `FINAL` returns a tagged object instead of calling
+back to the host. The host inspects `REPLResult.expression` and, if it sees
+a `__final__` tag, breaks the loop.
+
+For `FINAL_VAR`, the host resolves the variable via `REPL.inspect()` and
+stringifies the result. This is what you use when the answer is a long list
+or a structured object — you build it in the REPL and hand it back by name.
+
+## Compaction, deferred
+
+One thing the Python implementation has that we don't (yet): context
+compaction. After N iterations, the loop summarizes the older history and
+folds the summary back in, keeping the prompt size bounded.
+
+We deferred this in the spec ("out of scope for v1") because we want to
+*see* whether the prompt actually overflows before adding machinery to
+handle it. In our tests so far — "print the first 100 powers of two",
+needle-in-the-haystack with ~1M tokens of context — we've stayed well under
+the model's context window. If that changes, compaction lands next.
+
+## The e2e test that pins it all down
+
+The signature test, copied from `rlm-minimal`:
+
+```ts
+const rlm = new RLM({ client, repl, systemPrompt: BUILTIN_SYSTEM_PROMPT });
+const result = await rlm.completion("Print the first 100 powers of two");
+expect(result.response).toContain("1, 2, 4, 8, 16, 32, ...");
+```
+
+If that test passes — across the LM client, the REPL, the loop, the budget,
+and the FINAL detection — the architecture is working end-to-end. Everything
+else is just more examples of the same shape.

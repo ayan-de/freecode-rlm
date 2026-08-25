@@ -1,0 +1,137 @@
+---
+title: "The sandbox: isolated-vm and host bridges"
+date: 2026-08-25
+description: >
+  How we let the LM write JavaScript that calls back into our host process
+  without deadlocking, leaking globals, or letting user code escape.
+tags: [repl, sandbox, isolated-vm]
+author: ayan-de
+---
+
+The RLM loop turns on a single trick: **the LM writes code, we execute it,
+and when the code wants to call another LM, we have to cross back into the
+host process without breaking anything.** This post is about how that bridge
+works in `packages/rlm-repl`.
+
+## Why not just `vm.runInNewContext`?
+
+Node's built-in `vm` module is fast and easy, but it has two problems for
+this use case:
+
+1. The sandbox shares the host's memory. A runaway `while (true) {}` doesn't
+   just freeze the REPL; it freezes the entire Node process.
+2. Host-callable functions have to be wired manually and asynchronously, and
+   the API is awkward. (`vm` doesn't have a clean "async host callback"
+   story.)
+
+`isolated-vm` (v5.x) gives us both: a real separate V8 isolate with a hard
+memory limit, and a clean `ivm.Reference` mechanism for async host callbacks.
+
+## The interface
+
+The public surface is small:
+
+```ts
+export interface REPL {
+  load(name: string, value: unknown): Promise<void>;
+  execute(
+    code: string,
+    opts?: { timeoutMs?: number },
+  ): Promise<REPLResult>;
+  readStdout(): string[];
+  inspect(): Promise<Record<string, unknown>>;
+  dispose(): Promise<void>;
+}
+```
+
+`load` puts a variable in scope (`context = "very long prompt..."`). `execute`
+runs a chunk of code and returns the final expression's value plus any
+stdout captured during the run. `inspect` is used by the loop to build the
+next prompt (we show the LM the variables it has in scope).
+
+## Crossing the host boundary
+
+The interesting case is when user code calls `llm_query("...")`. We need to:
+
+1. Receive the call inside the sandbox.
+2. Suspend the sandbox while we call out to the LM.
+3. Resume the sandbox with the result.
+
+`isolated-vm` does this with `ivm.Reference`:
+
+```ts
+const llmQueryRef = ivm.Reference.create(async (prompt: string) => {
+  const message = await client.chat([{ role: "user", content: prompt }]);
+  return message.content;
+});
+
+// Expose into the sandbox:
+const context = ivm.createContext({
+  llm_query: llmQueryRef,
+  PRINT: printRef,
+  FINAL: finalRef,
+});
+```
+
+Inside the sandbox we install small JS shims that `apply` the host reference
+and unwrap the result. The shim is one line; the interesting work is on the
+host side.
+
+The key correctness property: **the sandbox cannot reach into the host
+process.** It can only call the four exposed references, and each one is a
+narrowly typed function. There are no leaked globals, no `require`, no
+`process`. If user code tries to do something we didn't anticipate, it gets
+`undefined`.
+
+## FINAL is not a function
+
+One subtle point from the spec: `FINAL("the answer is 42")` looks like a
+function call, but it isn't. It's a **sentinel** the host recognizes. When
+the sandbox-side shim for `FINAL` runs, it doesn't actually call anything on
+the host — it returns a tagged object. The host inspects the
+`REPLResult.expression`, sees the sentinel, and breaks out of the loop.
+
+This matches the original RLM convention exactly and avoids two classes of
+bug:
+
+- A model that *calls* `FINAL` but doesn't realize it's supposed to be a
+  function (so it tries `let FINAL = ...` and shadows it) — handled cleanly
+  by the shim.
+- A model that wants to return a variable rather than a literal — handled by
+  `FINAL_VAR("result")`, which the host resolves via `REPL.inspect()`.
+
+## Timeouts, memory, and graceful failure
+
+`isolated-vm` lets us set both a CPU timeout and a memory limit per
+execution. Defaults: 30 seconds, 256 MB.
+
+When either limit trips, `execute()` returns:
+
+```ts
+{
+  success: false,
+  stdout: [...],   // whatever printed before the limit
+  error: { name, message, trace },
+  durationMs: 12345,
+}
+```
+
+The RLM loop surfaces this to the LM as a normal `REPLResult` — no special
+casing. The model sees the error, sees the partial stdout, and gets to decide
+what to do next (retry, give up, call `llm_query` for help, etc.). This is
+one of the nicest properties of the design: the model is the error-handling
+layer.
+
+## What's tested
+
+`rlm-repl` has a tight test suite:
+
+- Arbitrary JS executes and returns the final expression's value.
+- `console.log` is captured into stdout.
+- Timeouts return `{ success: false, error: ... }` with partial stdout.
+- Memory breaches do the same.
+- No host globals (`process`, `require`, `globalThis`) leak into the sandbox.
+- Async host callbacks (`llm_query`) round-trip correctly.
+
+These aren't glamorous tests, but they're the ones that catch "the sandbox
+quietly became just a slower `vm.runInNewContext`."
