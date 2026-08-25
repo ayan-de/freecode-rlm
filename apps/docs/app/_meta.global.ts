@@ -4,8 +4,4 @@ export default {
     display: "hidden",
     title: "About",
   },
-  posts: {
-    type: "page",
-    title: "Devlog",
-  },
 };
