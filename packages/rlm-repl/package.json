@@ -11,7 +11,7 @@
     "lint": "eslint src"
   },
   "dependencies": {
-    "isolated-vm": "^5.0.1"
+    "isolated-vm": "^6.2.0"
   },
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",
